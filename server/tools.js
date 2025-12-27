@@ -8,7 +8,9 @@ export function buildTools({ canvasState }) {
   const getCanvasState = tool({
     description: '获取当前画布摘要（对象名称/坐标/角度等）。',
     inputSchema: zodSchema(z.object({})),
-    execute: async () => ({ canvasState: canvasState || '' }),
+    // NOTE: the real canvas lives in the browser. The server cannot read it directly.
+    // This tool call is used as a request signal; the client will execute it and send TOOL_RESULT in a follow-up request.
+    execute: async () => ({ requested: true }),
   });
 
   const setCornerText = tool({
@@ -19,7 +21,8 @@ export function buildTools({ canvasState }) {
       corner: CornerSchema,
       text: z.string().max(280),
     })),
-    execute: async (input) => input,
+    // This is a frontend-visible UI action; the client will apply it.
+    execute: async (input) => ({ ...input, requested: true }),
   });
 
   return {

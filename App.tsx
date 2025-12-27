@@ -847,9 +847,8 @@ const buildCanvasStateForLLM = useCallback((): string => {
         return;
       }
 
-      // Attach canvas context when the (small) intent model says it's needed, or when we detect edit keywords.
+      // Provide minimal context (object names only). For full canvas state, prefer the tool-runner loop via get_canvas_state().
       if (wantsClear || maybeEdit || intent.needsState || intent.needsObjects) {
-        // Provide immediate environment context so the model can generate correct delete/modify commands.
         const current = appletRef.current?.getAllObjectNames?.();
         const currentObjects = Array.isArray(current)
           ? current
@@ -857,13 +856,10 @@ const buildCanvasStateForLLM = useCallback((): string => {
             ? current.split(',').map((s) => s.trim()).filter(Boolean)
             : [];
         const intentLabel = wantsClear ? 'clear/reset' : (maybeEdit ? 'edit/modify' : `context-needed(${intent.kind || 'other'})`);
-        const state = intent.needsState || wantsClear || maybeEdit ? buildStateSummary() : '';
         errorContext =
           `User intent: ${intentLabel}. ` +
-          (intent.needsObjects || wantsClear || maybeEdit
-            ? (currentObjects.length > 0 ? `Current objects: ${currentObjects.join(", ")}.` : `Current objects: (none).`)
-            : '') +
-          (state ? ` State: ${state}` : '');
+          (currentObjects.length > 0 ? `Current objects: ${currentObjects.join(", ")}.` : `Current objects: (none).`) +
+          ' If you need full canvas state, call get_canvas_state() first.';
       }
 
       if (errorContext.trim().length > 0) {
@@ -895,18 +891,13 @@ const buildCanvasStateForLLM = useCallback((): string => {
         }
 
         const effectivePhase: typeof phase = retryCount > 0 ? 'repair' : phase;
-        // Default: do NOT send canvasState. Only attach when the user intent depends on the existing canvas.
-        const includeCanvasState = Boolean(
-          forceIncludeCanvasState ||
-          wantsClear ||
-          maybeEdit ||
-          intent.needsState ||
-          intent.needsObjects
-        );
+        // Default: do NOT send canvasState. Prefer the tool-runner loop (LLM calls get_canvas_state; client returns TOOL_RESULT).
+        // Only attach canvasState on explicit retries/fallback.
+        const includeCanvasState = Boolean(forceIncludeCanvasState);
         const canvasState = includeCanvasState ? buildCanvasStateForLLM() : undefined;
         const canvasMsg: ChatMessage[] = []; // not auto-injecting as message
 
-        const chatRequest = {
+        const baseChatRequest = {
           messages: [...baseHistory, ...toolHistory, ...canvasMsg],
           endpointId: endpointId === 'auto' ? undefined : endpointId,
           // Always allow fallback; endpointId only sets preference order.
@@ -918,6 +909,40 @@ const buildCanvasStateForLLM = useCallback((): string => {
           // Optional: current canvas summary; default OFF (on-demand only).
           canvasState,
         };
+
+        const isCorner = (v: any): v is Corner =>
+          v === 'top-left' || v === 'top-right' || v === 'bottom-left' || v === 'bottom-right';
+
+        const executeFrontendToolCall = async (toolCall: any) => {
+          const toolName = String(toolCall?.toolName || '');
+          const toolCallId = String(toolCall?.toolCallId || '');
+          const input = toolCall?.input ?? {};
+
+          try {
+            if (toolName === 'get_canvas_state') {
+              const cs = buildCanvasStateForLLM() || '';
+              return { toolCallId, toolName, ok: true, output: { canvasState: cs } };
+            }
+            if (toolName === 'set_corner_text') {
+              const corner = input?.corner;
+              const text = typeof input?.text === 'string' ? String(input.text).slice(0, 280) : '';
+              if (!isCorner(corner) || !text) {
+                return { toolCallId, toolName, ok: false, error: 'Invalid set_corner_text input.' };
+              }
+              setOverlayTexts((prev) => ({ ...prev, [corner]: text }));
+              return { toolCallId, toolName, ok: true, output: { applied: true } };
+            }
+            return { toolCallId, toolName, ok: false, error: `Unknown frontend tool: ${toolName}` };
+          } catch (e: any) {
+            return { toolCallId, toolName, ok: false, error: String(e?.message || e || 'Tool failed') };
+          }
+        };
+
+        const llmTurns: any[] = [];
+        const frontendToolMessages: ChatMessage[] = [];
+        const MAX_FRONTEND_TOOL_TURNS = 4;
+        let toolTurn = 0;
+
         pushDebug({
           type: 'chat_attempt_start',
           runId,
@@ -926,33 +951,118 @@ const buildCanvasStateForLLM = useCallback((): string => {
           phase: effectivePhase,
           endpointId,
           errorContext,
-          request: chatRequest,
-        });
-        const apiRes = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(chatRequest),
+          request: baseChatRequest,
         });
 
-        if (!apiRes.ok) {
-          const { text: errText, json } = await readErrorPayload(apiRes);
+        let finalServerPayload: any = null;
+        while (toolTurn < MAX_FRONTEND_TOOL_TURNS) {
+          const chatRequest = {
+            ...baseChatRequest,
+            messages: [...baseChatRequest.messages, ...frontendToolMessages],
+          };
+
+          const apiRes = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(chatRequest),
+          });
+
+          if (!apiRes.ok) {
+            const { text: errText, json } = await readErrorPayload(apiRes);
+            pushDebug({
+              type: 'api_chat_error',
+              runId,
+              prompt: text,
+              retryCount,
+              endpointId,
+              phase: effectivePhase,
+              status: apiRes.status,
+              error: errText || `API error: ${apiRes.status}`,
+              debugTrace: json?.debugTrace,
+              promptVersion: json?.promptVersion,
+              request: chatRequest,
+            });
+            throw new Error(errText || `API error: ${apiRes.status}`);
+          }
+
+          const payload = (await apiRes.json()) as any;
+          const kind = String(payload?.kind || 'final');
+          llmTurns.push({
+            step: toolTurn,
+            kind,
+            usedEndpointId: payload?.usedEndpointId,
+            usedModelId: payload?.usedModelId,
+            usedProvider: payload?.usedProvider,
+            usedLabel: payload?.usedLabel,
+            promptVersion: payload?.promptVersion,
+            toolCalls: payload?.toolCalls,
+            toolRequest: payload?.toolRequest || null,
+          });
+
           pushDebug({
-            type: 'api_chat_error',
+            type: 'llm_response',
             runId,
             prompt: text,
             retryCount,
             endpointId,
+            usedEndpointId: payload?.usedEndpointId,
+            usedModelId: payload?.usedModelId,
+            usedProvider: payload?.usedProvider,
+            usedLabel: payload?.usedLabel,
+            errorContext,
             phase: effectivePhase,
-            status: apiRes.status,
-            error: errText || `API error: ${apiRes.status}`,
-            debugTrace: json?.debugTrace,
-            promptVersion: json?.promptVersion,
+            response: payload?.response,
+            debugTrace: payload?.debugTrace,
+            promptVersion: payload?.promptVersion,
+            toolCalls: payload?.toolCalls,
             request: chatRequest,
-          });
-          throw new Error(errText || `API error: ${apiRes.status}`);
+            kind,
+            toolRequest: payload?.toolRequest,
+          } as any);
+
+          if (kind === 'tool_request' && Array.isArray(payload?.toolRequest?.toolCalls) && payload.toolRequest.toolCalls.length > 0) {
+            const calls = payload.toolRequest.toolCalls as any[];
+            const results = [];
+            for (const c of calls) {
+              const r = await executeFrontendToolCall(c);
+              results.push(r);
+              frontendToolMessages.push({
+                role: 'tool',
+                content: JSON.stringify({ toolCallId: r.toolCallId, toolName: r.toolName, ok: r.ok, output: r.output, error: r.error }),
+                meta: { type: 'tool_result', toolName: r.toolName, toolCallId: r.toolCallId },
+              });
+            }
+            pushDebug({
+              type: 'frontend_tool_results',
+              runId,
+              prompt: text,
+              retryCount,
+              endpointId,
+              phase: effectivePhase,
+              results,
+            } as any);
+            toolTurn += 1;
+            continue;
+          }
+
+          finalServerPayload = payload;
+          break;
         }
 
-        const { response, usedEndpointId, usedModelId, usedProvider, usedLabel, debugTrace, promptVersion, toolCalls } = (await apiRes.json()) as {
+        if (!finalServerPayload || !finalServerPayload.response) {
+          throw new Error('Frontend tool runner exceeded max turns or no final response returned.');
+        }
+
+        const {
+          response,
+          usedEndpointId,
+          usedModelId,
+          usedProvider,
+          usedLabel,
+          debugTrace,
+          promptVersion,
+          toolCalls,
+        } = finalServerPayload as {
           response: GGBResponse;
           usedEndpointId: string;
           usedModelId?: string | null;
@@ -962,25 +1072,6 @@ const buildCanvasStateForLLM = useCallback((): string => {
           promptVersion?: string;
           toolCalls?: any;
         };
-
-        pushDebug({
-          type: 'llm_response',
-          runId,
-          prompt: text,
-          retryCount,
-          endpointId,
-          usedEndpointId,
-          usedModelId,
-          usedProvider,
-          usedLabel,
-          errorContext,
-          phase: effectivePhase,
-          response,
-          debugTrace,
-          promptVersion,
-          toolCalls,
-          request: chatRequest,
-        });
 
         const attemptRecord: any = {
           attempt: retryCount,
@@ -996,26 +1087,13 @@ const buildCanvasStateForLLM = useCallback((): string => {
           usedLabel,
           promptVersion,
           toolCalls,
+          llmTurns,
           response: {
             overlayText: (response as any)?.overlayText || null,
             commandsCount: Array.isArray(response?.commands) ? response.commands.length : 0,
           },
         };
         attemptRecords.push(attemptRecord);
-
-        // If the model requested `get_canvas_state` but we didn't attach canvasState, retry once with canvasState.
-        const requestedCanvasViaTool = Array.isArray(toolCalls)
-          ? toolCalls.some((c: any) => String(c?.toolName || '').toLowerCase() === 'get_canvas_state')
-          : false;
-        if (requestedCanvasViaTool && !includeCanvasState) {
-          const cs = buildCanvasStateForLLM();
-          if (cs) {
-            attemptRecord.action = 'retry_with_canvasState_due_to_tool_request';
-            forceIncludeCanvasState = true;
-            retryCount += 1;
-            continue;
-          }
-        }
 
         // 如果模型请求画布状态，则把当前画布作为 tool 消息喂回，再重试，不计为执行失败。
         const canvasRequested =

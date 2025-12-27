@@ -244,6 +244,8 @@ const GGB_SCHEMA = z.object({
 let GLOBAL_CANVAS_STATE = '';
 
 const GGB_TOOL_NAME = 'ggb_response';
+const FRONTEND_TOOL_NAMES = new Set(['get_canvas_state', 'set_corner_text']);
+const TOOL_RESULT_PREFIX = 'TOOL_RESULT:';
 const CANVAS_STATE_REQUEST_TOKEN = '<<GET_CANVAS_STATE>>';
 const OVERLAY_TOOL_NAME = 'set_corner_text';
 
@@ -780,7 +782,12 @@ async function generateGgbObjectWithTool({ model, system, messages, maxRetries, 
     tools: { [GGB_TOOL_NAME]: GGB_TOOL, ...tools },
     toolChoice: toolChoice || 'auto',
     // Allow multi-step tool use (e.g. call get_canvas_state, then call ggb_response).
-    stopWhen: [hasToolCall(GGB_TOOL_NAME), stepCountIs(6)],
+    stopWhen: [
+      // Stop early if the model requested a frontend tool; the browser will execute and send results in a follow-up request.
+      ...Array.from(FRONTEND_TOOL_NAMES).map((name) => hasToolCall(name)),
+      hasToolCall(GGB_TOOL_NAME),
+      stepCountIs(6),
+    ],
     prepareStep,
     maxRetries,
     abortSignal: AbortSignal.timeout(timeoutMs),
@@ -796,6 +803,26 @@ async function generateGgbObjectWithTool({ model, system, messages, maxRetries, 
 
   const mergedToolResults = (allToolResults.length ? allToolResults : toolResults) || [];
   const mergedToolCalls = (allToolCalls.length ? allToolCalls : toolCalls) || [];
+
+  const extractFrontendToolCalls = () => {
+    try {
+      const calls = Array.isArray(mergedToolCalls) ? mergedToolCalls : [];
+      const out = [];
+      for (const c of calls) {
+        if (!c || c.type !== 'tool-call') continue;
+        if (!FRONTEND_TOOL_NAMES.has(c.toolName)) continue;
+        out.push({
+          type: 'tool-call',
+          toolCallId: c.toolCallId,
+          toolName: c.toolName,
+          input: c.input ?? {},
+        });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  };
 
   const extractOverlayText = () => {
     try {
@@ -828,6 +855,12 @@ async function generateGgbObjectWithTool({ model, system, messages, maxRetries, 
     } catch {}
     throw err;
   };
+
+  const frontendCalls = extractFrontendToolCalls();
+  if (frontendCalls.length > 0) {
+    // Do NOT validate/return ggb_response here. The client will run these tools, then send TOOL_RESULT in a follow-up request.
+    return { object: null, toolRequest: { toolCalls: frontendCalls }, usage, rawText: null, toolCalls: mergedToolCalls };
+  }
 
   const result = mergedToolResults.find((r) => r && r.type === 'tool-result' && r.toolName === GGB_TOOL_NAME);
   if (result && result.output) {
@@ -1136,7 +1169,19 @@ app.post('/api/chat', async (req, res) => {
   const cacheKey = normalizeCacheKey(lastUser?.content || '');
   const versionedCacheKey = cacheKey ? `${promptBundle.version}::${phase}::${cacheKey}` : null;
   const cached = versionedCacheKey ? cacheGet(versionedCacheKey) : null;
-  const forceCanvasStateTool = Boolean(canvasState && canvasState.trim().length > 0 && shouldForceCanvasStateTool(lastUserText));
+  const hasCanvasStateToolResult = (messages || []).some((m) => {
+    try {
+      return (
+        m &&
+        m.role === 'tool' &&
+        String(m?.meta?.type || '') === 'tool_result' &&
+        String(m?.meta?.toolName || '') === 'get_canvas_state'
+      );
+    } catch {
+      return false;
+    }
+  });
+  const wantsCanvasStateViaTool = Boolean(!hasCanvasStateToolResult && !canvasState && shouldForceCanvasStateTool(lastUserText));
 
   // For core teaching scenarios, prefer deterministic local fallback first to avoid model-specific DSL drift.
   // Only apply when the client did NOT explicitly choose an endpoint (so "GLM main" tests won't be bypassed).
@@ -1148,6 +1193,7 @@ app.post('/api/chat', async (req, res) => {
       { endpointId: usedEndpointId, label: usedEndpointId, provider: 'local', modelId: null, ok: true, ms: 0, error: null, usage: null },
     ];
     return res.json({
+      kind: 'final',
       response: rest,
       usedEndpointId,
       usedModelId: null,
@@ -1164,7 +1210,13 @@ app.post('/api/chat', async (req, res) => {
     const cmds = m.commands && m.commands.length ? `\nCommands: ${m.commands.join(' | ')}` : '';
     const text = `${m.content}${cmds}`;
     const role = m.role === 'assistant' ? 'assistant' : 'user';
-    const finalText = m.role === 'tool' ? `RUNTIME_FEEDBACK:\n${text}` : text;
+    const metaType = String(m?.meta?.type || '');
+    const finalText =
+      m.role === 'tool' && metaType === 'tool_result'
+        ? `${TOOL_RESULT_PREFIX}\n${text}`
+        : m.role === 'tool'
+          ? `RUNTIME_FEEDBACK:\n${text}`
+          : text;
     return { role, content: [{ type: 'text', text: finalText }] };
   });
 
@@ -1176,7 +1228,8 @@ app.post('/api/chat', async (req, res) => {
         type: 'text',
         text:
           'Tools available: get_canvas_state (获取当前画布摘要), set_corner_text (设置画布四角固定提示文字)。' +
-          '需要画布信息时请先调用 get_canvas_state。作图完成后可用 set_corner_text 给小朋友一个简短步骤提示。',
+          '当你需要画布信息时请先调用 get_canvas_state；应用会在下一轮用 TOOL_RESULT 返回结果，然后你再继续作答/作图。' +
+          '作图完成后可用 set_corner_text 给小朋友一个简短步骤提示。',
       },
     ],
   });
@@ -1299,6 +1352,7 @@ app.post('/api/chat', async (req, res) => {
 
         if (versionedCacheKey) cachePut(versionedCacheKey, maybeAdjusted);
         return res.json({
+          kind: 'final',
           response: maybeAdjusted,
           usedEndpointId: p.id,
           usedModelId: modelId,
@@ -1407,8 +1461,10 @@ app.post('/api/chat', async (req, res) => {
               messages: modelMessages,
               maxRetries: compatMaxRetries,
               timeoutMs,
-              toolChoice: forceCanvasStateTool ? 'auto' : { type: 'tool', toolName: GGB_TOOL_NAME },
-              prepareStep: forceCanvasStateTool
+              // Stability first: when we don't expect frontend tools, force the final tool.
+              // When we expect frontend tools, allow the model to call them (toolChoice=auto) and stop on tool_request.
+              toolChoice: wantsCanvasStateViaTool ? 'auto' : { type: 'tool', toolName: GGB_TOOL_NAME },
+              prepareStep: wantsCanvasStateViaTool
                 ? ({ steps }) => {
                   if (!steps || steps.length === 0) {
                     return {
@@ -1417,12 +1473,32 @@ app.post('/api/chat', async (req, res) => {
                     };
                   }
                   return {
-                    toolChoice: { type: 'tool', toolName: GGB_TOOL_NAME },
-                    activeTools: [GGB_TOOL_NAME],
+                    toolChoice: 'auto',
+                    activeTools: [GGB_TOOL_NAME, 'get_canvas_state', 'set_corner_text'],
                   };
                 }
                 : undefined,
             });
+            if (toolResult.toolRequest) {
+              attempt.ok = true;
+              attempt.ms = Date.now() - startedAt;
+              attempt.error = null;
+              attempt.rawTextPreview = null;
+              attempt.usage = toolResult.usage || null;
+              debugTrace.push(attempt);
+              return res.json({
+                kind: 'tool_request',
+                response: null,
+                toolRequest: toolResult.toolRequest,
+                usedEndpointId: p.id,
+                usedModelId: resolvedModelId,
+                usedProvider: p.provider,
+                usedLabel: p.label,
+                debugTrace,
+                promptVersion,
+                toolCalls: toolResult?.toolCalls || null,
+              });
+            }
             object = toolResult.object;
             usage = toolResult.usage || null;
             providerToolCalls = toolResult?.toolCalls || null;
@@ -1454,7 +1530,7 @@ app.post('/api/chat', async (req, res) => {
                 maxRetries: compatMaxRetries,
                 timeoutMs,
                 toolChoice: 'auto',
-                prepareStep: forceCanvasStateTool
+                prepareStep: wantsCanvasStateViaTool
                   ? ({ steps }) => {
                     if (!steps || steps.length === 0) {
                       return {
@@ -1463,12 +1539,32 @@ app.post('/api/chat', async (req, res) => {
                       };
                     }
                     return {
-                      toolChoice: { type: 'tool', toolName: GGB_TOOL_NAME },
-                      activeTools: [GGB_TOOL_NAME],
+                      toolChoice: 'auto',
+                      activeTools: [GGB_TOOL_NAME, 'get_canvas_state', 'set_corner_text'],
                     };
                   }
                   : undefined,
               });
+              if (result.toolRequest) {
+                attempt.ok = true;
+                attempt.ms = Date.now() - startedAt;
+                attempt.error = null;
+                attempt.rawTextPreview = null;
+                attempt.usage = result.usage || null;
+                debugTrace.push(attempt);
+                return res.json({
+                  kind: 'tool_request',
+                  response: null,
+                  toolRequest: result.toolRequest,
+                  usedEndpointId: p.id,
+                  usedModelId: resolvedModelId,
+                  usedProvider: p.provider,
+                  usedLabel: p.label,
+                  debugTrace,
+                  promptVersion,
+                  toolCalls: result?.toolCalls || null,
+                });
+              }
               object = result.object;
               usage = result.usage || null;
               providerToolCalls = result?.toolCalls || null;
@@ -1573,6 +1669,7 @@ app.post('/api/chat', async (req, res) => {
           toolCalls: providerToolCalls,
         });
         return res.json({
+          kind: 'final',
           response: maybeAdjusted,
           usedEndpointId: p.id,
           usedModelId: resolvedModelId,
@@ -1621,33 +1718,35 @@ app.post('/api/chat', async (req, res) => {
   }
 
   // If all LLMs fail, try cache first, then a small local fallback for core teaching scenarios.
-  if (cached) {
-    debugTrace.push({ endpointId: 'cache', label: 'cache', provider: 'local', modelId: null, ok: true, ms: 0, error: null, usage: null });
-    return res.json({
-      response: cached,
-      usedEndpointId: 'cache',
-      usedModelId: null,
-      usedProvider: null,
-      usedLabel: null,
-      debugTrace,
-      promptVersion,
-    });
-  }
+	  if (cached) {
+	    debugTrace.push({ endpointId: 'cache', label: 'cache', provider: 'local', modelId: null, ok: true, ms: 0, error: null, usage: null });
+	    return res.json({
+	      kind: 'final',
+	      response: cached,
+	      usedEndpointId: 'cache',
+	      usedModelId: null,
+	      usedProvider: null,
+	      usedLabel: null,
+	      debugTrace,
+	      promptVersion,
+	    });
+	  }
   const fb = localFallback(messages);
-  if (fb) {
+	  if (fb) {
     const { usedEndpointId, _cacheKey, ...rest } = fb;
     if (_cacheKey) cachePut(_cacheKey, rest);
-    debugTrace.push({ endpointId: usedEndpointId, label: usedEndpointId, provider: 'local', modelId: null, ok: true, ms: 0, error: null, usage: null });
-    return res.json({
-      response: rest,
-      usedEndpointId,
-      usedModelId: null,
-      usedProvider: null,
-      usedLabel: null,
-      debugTrace,
-      promptVersion,
-    });
-  }
+	    debugTrace.push({ endpointId: usedEndpointId, label: usedEndpointId, provider: 'local', modelId: null, ok: true, ms: 0, error: null, usage: null });
+	    return res.json({
+	      kind: 'final',
+	      response: rest,
+	      usedEndpointId,
+	      usedModelId: null,
+	      usedProvider: null,
+	      usedLabel: null,
+	      debugTrace,
+	      promptVersion,
+	    });
+	  }
 
   return res.status(502).json({
     error: 'All LLM endpoints failed.',

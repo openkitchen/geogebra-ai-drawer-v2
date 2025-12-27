@@ -40,6 +40,7 @@
 - C4：当模型走 tool-calling 策略时，服务端响应包含 `toolCalls`，且 Debug 面板可查看 provider 原始 tool calls  
 - C5：`commands` 中不会出现 tool 名（如 `get_canvas_state()`）；若出现，服务端会剔除并触发正确的“获取画布状态”路径（不执行伪命令）。  
 - C6：对话中每条 assistant 回复包含“运行记录（默认折叠）”，可查看 toolCalls / 重试次数 / rollback 等信息（用于现场排障，不影响小朋友主体验）。  
+- C7：当模型需要画布信息时，应先调用 `get_canvas_state`，并触发 **tool runner**：服务端返回 `kind=tool_request`，前端执行后回传 `TOOL_RESULT`，再获得最终 `kind=final` 的绘图/回答（运行记录里可见 llmTurns）。  
 
 ### D. 面向小朋友的教学风格
 - D1：中文短句、分步骤（编号/分点），避免长段落堆砌  
@@ -50,7 +51,7 @@
 - E1：`.env.local` 里改 `LLM_ENDPOINTS_JSON` 后，模型列表随之变化  
 - E2：选定 `packy-glm47` 时，若该 endpoint 后端错误/超时，应自动 fallback 到 `kimi`（Debug log 里可看到 `usedEndpointId` 切换）  
 - E3：DebugPanel 的 Quick Prompt Runner 走主聊天链路（同一套 history + repair loop），不再是独立调用  
-- E4：`canvasState` 默认不发送；仅当用户“引用/修改现有图”时按需发送（Debug 的 Request(/api/chat) 可验证）。  
+- E4：`canvasState` 默认不发送；当用户“引用/修改现有图”时，应优先走 `get_canvas_state` 的 tool runner（服务端 `kind=tool_request` → 前端回传 `TOOL_RESULT` → `kind=final`），而不是直接在请求里附带整段 `canvasState`。  
 - E5：可通过 `set_corner_text`/`overlayText` 在画布四角展示固定说明文字（不随画布平移缩放），用于提示作图关键步骤。  
 
 ---
@@ -80,7 +81,7 @@
 1. 4.1 “画一个三角形 ABC（随便画）”  
 2. 4.2 “把刚才的三角形画出 BC 的垂直平分线，并说明它与外接圆圆心的关系”  
 3. 4.3 “把外接圆也画出来（如果你能），并解释为什么圆心在垂直平分线上”  
-4. 4.4 “你知道我画了什么吗？”（期望触发 `get_canvas_state` tool call 或按需附带 `canvasState`，且不会把 tool 名写进 `commands`）  
+4. 4.4 “你知道我画了什么吗？”（期望触发 `get_canvas_state` tool call，并走 tool runner：先 `tool_request` 再 `final`；且不会把 tool 名写进 `commands`）  
 
 ### 5) 错误自愈（故意让它错）
 1. “用 RegularPolygon 画一个正方形。”（本环境会 Unknown command，应能自愈改用可用构造）  

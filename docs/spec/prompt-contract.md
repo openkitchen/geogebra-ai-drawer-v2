@@ -10,6 +10,17 @@ LLM 输出 JSON：
 - `commands` **只能**包含 GeoGebra 命令；**禁止**把 tool 名（如 `get_canvas_state()` / `set_corner_text(...)` / `ggb_response(...)`）混进 `commands`。
 - 若模型错误地把 `get_canvas_state()` 写进 `commands`，服务端会剔除该“伪命令”，并可能在 `explanation` 里返回 `<<GET_CANVAS_STATE>>` 触发前端重试（该 token 不应展示给用户）。
 
+### 通用工具调用执行方式（前端执行 tool runner）
+我们采用 **前端执行工具 + 多轮 HTTP** 的通用模式（不依赖 SSE/WS）：
+1) LLM 需要画布信息/前端能力时先调用工具（例如 `get_canvas_state()` / `set_corner_text(...)`）。
+2) 服务端返回 `kind: "tool_request"` + `toolCalls`（不直接执行前端工具）。
+3) 前端解析 `toolCalls` 并在浏览器执行，得到 `toolResults`。
+4) 前端把 `toolResults` 作为 `role:"tool"` 的消息回传 `/api/chat`，继续下一轮，直到 LLM 返回最终 `ggb_response`。
+
+目标：
+- 默认不发送 `canvasState`；只有模型明确请求 `get_canvas_state()` 时才按需上报。
+- 让前端能力（读取画布/测量/更新 UI）以 tool 形式可扩展（白名单 + schema 校验）。
+
 ### 命名与稳定性
 - 点/线/角命名：使用简短、稳定的名称（A,B,C,l, angA, angB2 等），避免随机后缀。
 - 避免一次生成过长的命令列表；优先“少而稳”。
