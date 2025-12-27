@@ -1,0 +1,167 @@
+[
+  {
+    "name": "Text",
+    "aliases": [],
+    "signature": "Text(text, Point)",
+    "example": "Text(\"α\", (0.2, 0.2))",
+    "pitfalls": ["Text(\"α\", 0.2, 0.2) 参数不合法，需要点对象"],
+    "execPath": "ggb-command",
+    "paramHints": ["Point object required", "Use quotes for text"],
+    "tags": ["geometry", "label"]
+  },
+  {
+    "name": "Polygon",
+    "aliases": ["RegularPolygon"],
+    "signature": "Polygon(A, B, n)",
+    "example": "Polygon(A, B, 5)",
+    "pitfalls": ["RegularPolygon(...) 不是常用签名", "需要两个点与边数"],
+    "execPath": "ggb-command",
+    "paramHints": ["Two points + integer sides"],
+    "tags": ["geometry", "shape"]
+  },
+  {
+    "name": "Angle",
+    "aliases": [],
+    "signature": "Angle(B, A, C)",
+    "example": "Angle(B, A, C)  // 顶点在中间，测量内角；如>180°改点序或用 InteriorAngles",
+    "pitfalls": [
+      "默认有向角，点序不当会得到>180°外角；确保顶点在中间且点序使角度<180°",
+      "钝角三角形建议使用 InteriorAngles(Polygon(A,B,C)) 直接取三个内角",
+      "若用户未要求外角，Angle 结果>180°时必须改点序/用内角后再输出；不要把外角当答案",
+      "不要移动用户给定的点；如需新点请用新名称"
+    ],
+    "execPath": "ggb-command",
+    "paramHints": ["Vertex is middle point"],
+    "tags": ["geometry", "measure"]
+  },
+  {
+    "name": "Circle",
+    "aliases": [],
+    "signature": "Circle(Center, Point)",
+    "example": "Circle(A, B)",
+    "pitfalls": ["不要用半径数字替代点，改用 Circle(A, r) 或 A,B 两点"],
+    "execPath": "ggb-command",
+    "paramHints": ["Use center + point on circle"],
+    "tags": ["geometry", "shape"]
+  },
+  {
+    "name": "Segment",
+    "aliases": [],
+    "signature": "Segment(A, B)",
+    "example": "Segment(A, B)",
+    "pitfalls": ["确保 A/B 已存在"],
+    "execPath": "ggb-command",
+    "paramHints": [],
+    "tags": ["geometry", "line"]
+  },
+  {
+    "name": "Line",
+    "aliases": [],
+    "signature": "Line(A, B)",
+    "example": "Line(A, B)",
+    "pitfalls": ["不要用斜率数字代替点"],
+    "execPath": "ggb-command",
+    "paramHints": [],
+    "tags": ["geometry", "line"]
+  },
+  {
+    "name": "Ray",
+    "aliases": [],
+    "signature": "Ray(A, B)",
+    "example": "Ray(A, B)",
+    "pitfalls": [],
+    "execPath": "ggb-command",
+    "paramHints": [],
+    "tags": ["geometry", "line"]
+  },
+  {
+    "name": "Midpoint",
+    "aliases": ["MidPoint"],
+    "signature": "Midpoint(A, B)",
+    "example": "Midpoint(A, B)",
+    "pitfalls": ["首字母大小写注意，但别名可映射"],
+    "execPath": "ggb-command",
+    "paramHints": [],
+    "tags": ["geometry", "construction"]
+  },
+  {
+    "name": "PerpendicularLine",
+    "aliases": ["Perpendicular"],
+    "signature": "PerpendicularLine(Point, Line)",
+    "example": "PerpendicularLine(A, f)",
+    "pitfalls": ["第二个参数必须是直线/射线/线段对象"],
+    "execPath": "ggb-command",
+    "paramHints": [],
+    "tags": ["geometry", "line"]
+  },
+  {
+    "name": "ParallelLine",
+    "aliases": ["Parallel"],
+    "signature": "ParallelLine(Point, Line)",
+    "example": "ParallelLine(A, f)",
+    "pitfalls": ["不要传两点；需已有基准线"],
+    "execPath": "ggb-command",
+    "paramHints": [],
+    "tags": ["geometry", "line"]
+  },
+  {
+    "name": "Intersect",
+    "aliases": ["Intersection"],
+    "signature": "Intersect(obj1, obj2)",
+    "example": "Intersect(f, g)",
+    "pitfalls": ["必须是可相交对象，如线与圆"],
+    "execPath": "ggb-command",
+    "paramHints": [],
+    "tags": ["geometry", "construction"]
+  },
+  {
+    "name": "SetColor",
+    "aliases": [],
+    "signature": "SetColor(obj, r, g, b)",
+    "example": "SetColor(a, 0, 128, 255)",
+    "pitfalls": ["JS API 期望 0-255，避免 0..1 浮点"],
+    "execPath": "js-api",
+    "paramHints": ["Color components 0-255 ints"],
+    "tags": ["style", "js-api"]
+  },
+  {
+    "name": "SetLineThickness",
+    "aliases": [],
+    "signature": "SetLineThickness(obj, width)",
+    "example": "SetLineThickness(a, 4)",
+    "pitfalls": ["JS API 走 setLineThickness，宽度为整数"],
+    "execPath": "js-api",
+    "paramHints": ["Integer thickness"],
+    "tags": ["style", "js-api"]
+  },
+  {
+    "name": "SetLineStyle",
+    "aliases": [],
+    "signature": "SetLineStyle(obj, style)",
+    "example": "SetLineStyle(a, 2)",
+    "pitfalls": ["样式 0=实线，1=虚线，2=点划线"],
+    "execPath": "js-api",
+    "paramHints": ["0 solid, 1 dashed, 2 dotted-dash"],
+    "tags": ["style", "js-api"]
+  },
+  {
+    "name": "ShowLabel",
+    "aliases": [],
+    "signature": "ShowLabel(obj, true/false)",
+    "example": "ShowLabel(A, true)",
+    "pitfalls": ["布尔值小写 true/false"],
+    "execPath": "ggb-command",
+    "paramHints": [],
+    "tags": ["style", "label"]
+  },
+  {
+    "name": "SetVisibleInView",
+    "aliases": [],
+    "signature": "SetVisibleInView(obj, view, true/false)",
+    "example": "SetVisibleInView(a, 1, true)",
+    "pitfalls": ["view 通常 1=代数+几何视图，注意布尔小写"],
+    "execPath": "js-api",
+    "paramHints": [],
+    "tags": ["style", "visibility"]
+  }
+]

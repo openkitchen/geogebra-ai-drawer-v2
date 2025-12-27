@@ -1,0 +1,5 @@
+{
+  "name": "GeoGebra AI Drawer",
+  "description": "An intelligent mathematical drawing assistant that uses Gemini AI to translate natural language into interactive GeoGebra constructions and algebraic visualizations.",
+  "requestFramePermissions": []
+}
