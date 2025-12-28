@@ -14,13 +14,12 @@ const App: React.FC = () => {
   const [overlayTexts, setOverlayTexts] = useState<Partial<Record<Corner, string>>>({});
   const [showDebug, setShowDebug] = useState(false);
   const [selfTestRunning, setSelfTestRunning] = useState(false);
-const [promptRunning, setPromptRunning] = useState(false);
-const appletRef = useRef<GeoGebraApplet | null>(null);
+  const [promptRunning, setPromptRunning] = useState(false);
+  const appletRef = useRef<GeoGebraApplet | null>(null);
   const tabIdRef = useRef<string>('');
-  const CANVAS_STATE_REQUEST_TOKEN = '<<GET_CANVAS_STATE>>';
 
   const stripInternalTokensForDisplay = (text: string) => {
-    return String(text || '').split(CANVAS_STATE_REQUEST_TOKEN).join('').trim();
+    return String(text || '').trim();
   };
 
   useEffect(() => {
@@ -743,59 +742,6 @@ const buildCanvasStateForLLM = useCallback((): string => {
     }
   };
 
-  const localIntentHeuristic = (text: string, hasObjects: boolean) => {
-    if (!hasObjects) return { needsState: false, needsObjects: false, kind: 'draw' as const };
-    const t = String(text || '');
-    const lower = t.toLowerCase();
-    const mentionsExisting =
-      /你画了什么|我画了什么|画了个什么|现在是什么|这是什么形状|是什么形状|what did i draw|what shape|what is this shape/.test(lower) ||
-      /画布|画板|画面|当前图|当前画布|当前画面|画布上|画板上|on the canvas|current drawing|current objects/.test(lower) ||
-      /有哪些对象|有哪些元素|有哪些点|有哪些线|有什么对象|有什么点|有什么线|有什么图|what objects|which objects/.test(lower) ||
-      /这个|刚才|上面|下面|这里|那条|那个|此图|现有|基于/.test(t) ||
-      /modify|edit|change|move|shift|adjust|based on/.test(lower) ||
-      /删除|去掉|移除|清除|清空|重画|重绘|重做|改一下|修改|移动|拖动|加粗|变粗|变细|变浅|颜色|改颜色|隐藏|显示|标注|标签|简化|辅助线|只保留|保留/.test(t);
-    const mentionsObjectName = /\b[A-Z]\b/.test(t) || /点[A-Z]/.test(t) || /[A-Z]点/.test(t);
-    const needs = Boolean(mentionsExisting || mentionsObjectName);
-    return { needsState: needs, needsObjects: needs, kind: (needs ? 'edit' : 'question') as const };
-  };
-
-  const shouldAttachStateViaIntent = async (text: string) => {
-    try {
-      const hasObjects = getCurrentObjects().length > 0;
-      if (!hasObjects) return { needsState: false, needsObjects: false, kind: 'draw' as const };
-
-      // If local heuristic is confident it's an edit, skip the intent model to save cost/latency.
-      const heuristic = localIntentHeuristic(text, hasObjects);
-      if (heuristic.needsState || heuristic.needsObjects) {
-        pushDebug({ type: 'intent_heuristic', text, hasObjects, decision: heuristic });
-        return heuristic;
-      }
-
-      const ctrl = new AbortController();
-      const timer = window.setTimeout(() => ctrl.abort(), 1800);
-      const res = await fetch('/api/intent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, hasObjects }),
-        signal: ctrl.signal,
-      });
-      window.clearTimeout(timer);
-      if (!res.ok) return { needsState: false, needsObjects: false, kind: 'other' as const };
-      const data = (await res.json()) as { needsState?: boolean; needsObjects?: boolean; kind?: string };
-      pushDebug({ type: 'intent', text, hasObjects, decision: data });
-      return {
-        needsState: Boolean(data.needsState),
-        needsObjects: Boolean(data.needsObjects),
-        kind: (data.kind as any) || ('other' as const),
-      };
-    } catch {
-      const hasObjects = getCurrentObjects().length > 0;
-      const fallback = localIntentHeuristic(text, hasObjects);
-      pushDebug({ type: 'intent_fallback', text, hasObjects, decision: fallback });
-      return fallback;
-    }
-  };
-
   const handleSendMessage = async (text: string) => {
     const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const userMessage: Message = { role: 'user', content: text, timestamp: Date.now() };
@@ -806,12 +752,10 @@ const buildCanvasStateForLLM = useCallback((): string => {
     let errorContext = "";
     let finalResponse: GGBResponse | null = null;
     const attemptRecords: any[] = [];
-    let forceIncludeCanvasState = false;
     const wantsClear = /^(清屏|清空|清除|重置|reset|clear)$/i.test(text.trim());
     const maybeEdit = detectEditIntent(text);
     const preferences = getPreferenceString();
     let phase: 'draw' | 'proof' | 'edit' | 'repair' = isProofQuery(text) ? 'proof' : 'draw';
-    const intent = await shouldAttachStateViaIntent(text);
 
     try {
       pushDebug({
@@ -820,7 +764,6 @@ const buildCanvasStateForLLM = useCallback((): string => {
         prompt: text,
         endpointId,
         hasObjects: getCurrentObjects().length > 0,
-        intent,
       });
 
       if (wantsClear) {
@@ -847,19 +790,8 @@ const buildCanvasStateForLLM = useCallback((): string => {
         return;
       }
 
-      // Provide minimal context (object names only). For full canvas state, prefer the tool-runner loop via get_canvas_state().
-      if (wantsClear || maybeEdit || intent.needsState || intent.needsObjects) {
-        const current = appletRef.current?.getAllObjectNames?.();
-        const currentObjects = Array.isArray(current)
-          ? current
-          : typeof current === 'string'
-            ? current.split(',').map((s) => s.trim()).filter(Boolean)
-            : [];
-        const intentLabel = wantsClear ? 'clear/reset' : (maybeEdit ? 'edit/modify' : `context-needed(${intent.kind || 'other'})`);
-        errorContext =
-          `User intent: ${intentLabel}. ` +
-          (currentObjects.length > 0 ? `Current objects: ${currentObjects.join(", ")}.` : `Current objects: (none).`) +
-          ' If you need full canvas state, call get_canvas_state() first.';
+      if (maybeEdit) {
+        phase = 'edit';
       }
 
       if (errorContext.trim().length > 0) {
@@ -886,19 +818,10 @@ const buildCanvasStateForLLM = useCallback((): string => {
             ? [{ role: 'tool', content: errorContext }]
             : [];
 
-        if (maybeEdit || intent.needsState || intent.needsObjects) {
-          phase = 'edit';
-        }
-
         const effectivePhase: typeof phase = retryCount > 0 ? 'repair' : phase;
-        // Default: do NOT send canvasState. Prefer the tool-runner loop (LLM calls get_canvas_state; client returns TOOL_RESULT).
-        // Only attach canvasState on explicit retries/fallback.
-        const includeCanvasState = Boolean(forceIncludeCanvasState);
-        const canvasState = includeCanvasState ? buildCanvasStateForLLM() : undefined;
-        const canvasMsg: ChatMessage[] = []; // not auto-injecting as message
 
         const baseChatRequest = {
-          messages: [...baseHistory, ...toolHistory, ...canvasMsg],
+          messages: [...baseHistory, ...toolHistory],
           endpointId: endpointId === 'auto' ? undefined : endpointId,
           // Always allow fallback; endpointId only sets preference order.
           mode: 'auto',
@@ -906,8 +829,6 @@ const buildCanvasStateForLLM = useCallback((): string => {
           preferences,
           // Used by codex-cli provider to keep per-tab conversation state on the server machine.
           codexTabId: tabIdRef.current || undefined,
-          // Optional: current canvas summary; default OFF (on-demand only).
-          canvasState,
         };
 
         const isCorner = (v: any): v is Corner =>
@@ -1076,11 +997,8 @@ const buildCanvasStateForLLM = useCallback((): string => {
         const attemptRecord: any = {
           attempt: retryCount,
           phase: effectivePhase,
-          includeCanvasState,
-          forceIncludeCanvasState,
           wantsClear,
           maybeEdit,
-          intent,
           usedEndpointId,
           usedProvider,
           usedModelId,
@@ -1094,23 +1012,6 @@ const buildCanvasStateForLLM = useCallback((): string => {
           },
         };
         attemptRecords.push(attemptRecord);
-
-        // 如果模型请求画布状态，则把当前画布作为 tool 消息喂回，再重试，不计为执行失败。
-        const canvasRequested =
-          response?.explanation?.includes(CANVAS_STATE_REQUEST_TOKEN) ||
-          (Array.isArray(response?.commands) && response.commands.some((c) => c.includes(CANVAS_STATE_REQUEST_TOKEN)));
-        if (canvasRequested) {
-          const cs = buildCanvasStateForLLM();
-          if (cs) {
-            errorContext = cs; // 将其作为 tool 消息注入
-            // Also attach `canvasState` on the retry so the server can stop re-injecting the request token.
-            // (The token is only a hidden retry trigger, not user-facing content.)
-            attemptRecord.action = 'retry_with_canvasState_due_to_internal_token';
-            forceIncludeCanvasState = true;
-            retryCount += 1;
-            continue; // 跳过执行，直接进入下一轮让模型利用画布数据
-          }
-        }
         
         // 尝试执行（记录 attempt 前对象，便于失败时回滚，避免“错误图形残留叠加”）
         const attemptBeforeObjects = getCurrentObjects();

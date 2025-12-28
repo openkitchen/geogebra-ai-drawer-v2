@@ -49,20 +49,26 @@
 ### 3.1 架构不匹配点（evolution blockers）
 
 1) **后端存在跨请求可变全局状态**
-- 证据：`server/index.mjs` 使用 `GLOBAL_CANVAS_STATE`
+- 证据：`server/index.mjs` 曾使用 `GLOBAL_CANVAS_STATE`
 - 风险：即使当前“不考虑并发”，全局可变状态也会让未来的并发/多 tab/多用户测试变得脆弱；也降低“稳定性优先”的可信度。
 
+> 状态：已于 2025-12-28 迁移中移除（不再使用全局画布 state）。
+
 2) **存在两套并行的“画布感知”机制**
-- 证据：前端仍保留“内部 token 触发重试 / 强制携带 canvasState”与“tool runner”两套路径
+- 证据：前端曾同时保留“内部 token/直传 `canvasState`”与“tool runner”两套路径
 - 风险：行为分叉导致回归难、难定位；模型可能走到非预期路径（尤其在不同 provider 下）。
+
+> 状态：已于 2025-12-28 迁移中收敛：删除内部 token/直传 `canvasState` 路径，统一 `tool_request` → `TOOL_RESULT`。
 
 3) **通用 tool runner 协议仍偏隐式**
 - 证据：后端用 `TOOL_RESULT:` 前缀把 tool result 注入为文本；前端用 `meta.type="tool_result"` 传递，但未形成强类型/版本化 schema
 - 风险：协议升级成本高；tool 扩展时容易出现“字段名不一致/解析失败/模型误解”。
 
 4) **`/api/chat` 与旧 `/api/ggb` 并存**
-- 证据：`server/index.mjs` 同时暴露 `/api/chat`、`/api/ggb`
+- 证据：`server/index.mjs` 曾同时暴露 `/api/chat`、`/api/ggb`
 - 风险：逻辑漂移（例如 tool runner/回滚/观测只在一处），导致维护成本和线上行为差异。
+
+> 状态：已于 2025-12-28 迁移中下线 `/api/ggb`，统一走 `/api/chat`。
 
 ### 3.2 代码结构问题（maintenance blockers）
 
@@ -103,4 +109,3 @@
 2) 同步做 009（去全局 state）→ 为未来并发/多 tab 铺路  
 3) 做 016（收敛 API）→ 减少漂移与维护面  
 4) 再做 017/018（模块化拆分）→ 降低变更风险、提高可维护性  
-

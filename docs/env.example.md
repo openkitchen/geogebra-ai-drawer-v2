@@ -18,7 +18,6 @@ LLM_ENDPOINTS_JSON='[
     "apiKey": "${KIMI_API_KEY}",
     "models": {
       "main": "kimi-k2-thinking",
-      "intent": "moonshot-v1-8k",
       "fallback": "moonshot-v1-8k"
     }
   },
@@ -28,8 +27,7 @@ LLM_ENDPOINTS_JSON='[
     "provider": "google",
     "apiKey": "${GEMINI_API_KEY}",
     "models": {
-      "main": "gemini-2.5-flash",
-      "intent": "gemini-2.5-flash"
+      "main": "gemini-2.5-flash"
     }
   }
 ]'
@@ -37,16 +35,6 @@ LLM_ENDPOINTS_JSON='[
 # Put real keys as separate env vars:
 KIMI_API_KEY=YOUR_KIMI_KEY
 GEMINI_API_KEY=YOUR_GEMINI_KEY
-```
-
-### Optional: intent classifier (cheap/fast)
-
-The server also exposes `/api/intent` for intent routing (to decide whether to attach canvas state/objects).
-You can point it to a **small, fast, low-cost model** (selected by endpoint id):
-
-```bash
-INTENT_ENDPOINT_ID=kimi
-INTENT_TIMEOUT_MS=2500
 ```
 
 ### Optional: timeouts / fallbacks

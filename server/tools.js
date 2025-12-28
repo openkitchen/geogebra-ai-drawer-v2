@@ -2,7 +2,7 @@ import { tool, zodSchema } from 'ai';
 import { z } from 'zod';
 
 // Build tool map for ai-sdk (key -> tool definition)
-export function buildTools({ canvasState }) {
+export function buildTools() {
   const CornerSchema = z.enum(['top-left', 'top-right', 'bottom-left', 'bottom-right']);
 
   const getCanvasState = tool({

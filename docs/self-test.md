@@ -51,7 +51,7 @@
 - E1：`.env.local` 里改 `LLM_ENDPOINTS_JSON` 后，模型列表随之变化  
 - E2：选定 `packy-glm47` 时，若该 endpoint 后端错误/超时，应自动 fallback 到 `kimi`（Debug log 里可看到 `usedEndpointId` 切换）  
 - E3：DebugPanel 的 Quick Prompt Runner 走主聊天链路（同一套 history + repair loop），不再是独立调用  
-- E4：`canvasState` 默认不发送；当用户“引用/修改现有图”时，应优先走 `get_canvas_state` 的 tool runner（服务端 `kind=tool_request` → 前端回传 `TOOL_RESULT` → `kind=final`），而不是直接在请求里附带整段 `canvasState`。  
+- E4：客户端不主动发送 `canvasState`；当用户“引用/修改现有图”时，应优先走 `get_canvas_state` 的 tool runner（服务端 `kind=tool_request` → 前端回传 `TOOL_RESULT` → `kind=final`）。  
 - E5：可通过 `set_corner_text`/`overlayText` 在画布四角展示固定说明文字（不随画布平移缩放），用于提示作图关键步骤。  
 
 ---

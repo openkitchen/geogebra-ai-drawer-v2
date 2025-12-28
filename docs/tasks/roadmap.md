@@ -8,7 +8,7 @@
 - [ ] Stronger runtime feedback capture (dialogs, evalCommand=false details).
 - [ ] Consistent rollback with clear debug logs.
 - [ ] Timeouts and retry budget tuning.
-- [x] Canvas state on-demand: 默认不下发 `canvasState`，仅在“编辑/引用现有图”时发送，并具备兜底请求路径（todo 007/008）。
+- [x] Canvas state on-demand: 默认不下发 `canvasState`；引用/修改现有图时通过 tool runner 获取，并具备服务端 `tool_request` 兜底（todo 007/008）。
 
 ### M2: Teaching quality
 - [ ] More scenario playbooks (proof, construction, simplification).

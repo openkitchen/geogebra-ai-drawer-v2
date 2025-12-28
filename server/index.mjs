@@ -241,12 +241,9 @@ const GGB_SCHEMA = z.object({
   obtuseAnchor: z.string().optional(),
 });
 
-let GLOBAL_CANVAS_STATE = '';
-
 const GGB_TOOL_NAME = 'ggb_response';
 const FRONTEND_TOOL_NAMES = new Set(['get_canvas_state', 'set_corner_text']);
 const TOOL_RESULT_PREFIX = 'TOOL_RESULT:';
-const CANVAS_STATE_REQUEST_TOKEN = '<<GET_CANVAS_STATE>>';
 const OVERLAY_TOOL_NAME = 'set_corner_text';
 
 const GGB_TOOL = tool({
@@ -335,15 +332,8 @@ function sanitizeGgbResponse(response) {
     return validated.success ? validated.data : undefined;
   })();
 
-  // If the model mistakenly put `get_canvas_state()` into commands, treat it as a request for canvas context.
-  // The client recognizes this token and will re-try with a canvas summary, without showing it to users.
-  const needsCanvasToken = stripped.requestedCanvasState && !GLOBAL_CANVAS_STATE;
-  const safeExplanation = needsCanvasToken
-    ? [explanation, CANVAS_STATE_REQUEST_TOKEN].filter(Boolean).join('\n')
-    : explanation;
-
   return {
-    explanation: safeExplanation,
+    explanation,
     commands: stripped.commands,
     removedToolCommands: stripped.removed,
     overlayText,
@@ -772,7 +762,7 @@ if (shouldLogConnectionInfo) {
 }
 
 async function generateGgbObjectWithTool({ model, system, messages, maxRetries, timeoutMs, toolChoice, prepareStep }) {
-  const tools = buildTools({ canvasState: GLOBAL_CANVAS_STATE });
+  const tools = buildTools();
   const allToolCalls = [];
   const allToolResults = [];
   const { toolResults, toolCalls, usage, response, text } = await generateText({
@@ -1022,103 +1012,6 @@ app.get('/api/providers', (_req, res) => {
   res.json(list);
 });
 
-// Intent router: decide whether to include canvas state/objects for better multi-turn UX.
-const INTENT_SCHEMA = z.object({
-  kind: z.enum(['draw', 'edit', 'explain', 'question', 'other']),
-  needsState: z.boolean(),
-  needsObjects: z.boolean(),
-  reason: z.string(),
-});
-
-function pickIntentModel() {
-  const preferId = process.env.INTENT_ENDPOINT_ID || 'kimi';
-  const baseCfg =
-    endpointConfigsById.get(preferId) ||
-    endpointConfigsById.get('kimi') ||
-    endpointConfigs[0] ||
-    null;
-  if (!baseCfg) return null;
-
-  const intentKey = process.env.INTENT_MODEL_KEY || 'intent';
-  const overrideModelId =
-    process.env.INTENT_MODEL_ID ||
-    (baseCfg.models && baseCfg.models[intentKey]) ||
-    (baseCfg.models && baseCfg.models.intent) ||
-    (baseCfg.id === 'kimi' ? 'moonshot-v1-8k' : baseCfg.modelId);
-
-  try {
-    const intentCfg = { ...baseCfg, modelId: overrideModelId };
-    return {
-      id: baseCfg.id,
-      label: baseCfg.label,
-      provider: baseCfg.provider,
-      modelId: overrideModelId,
-      model: buildModel(intentCfg),
-    };
-  } catch {
-    // Fall back to main model instance (already built) if rebuild fails.
-    return endpointModels.find((e) => e.id === baseCfg.id) || endpointModels[0] || null;
-  }
-}
-
-function heuristicIntent(text, hasObjects) {
-  const t = String(text || '');
-  const lower = t.toLowerCase();
-  const mentionsExisting =
-    /这个|刚才|上面|下面|这里|那条|那个|此图|现有|基于/.test(t) ||
-    /modify|edit|change|move|shift|adjust|based on/.test(lower) ||
-    /删除|去掉|移除|清除|清空|重画|重绘|重做|改一下|修改|移动|拖动/.test(t);
-  const mentionsObjectName = /\b[A-Z]\b/.test(t) || /点[A-Z]/.test(t) || /[A-Z]点/.test(t);
-  const needs = Boolean(hasObjects && (mentionsExisting || mentionsObjectName));
-  return {
-    kind: needs ? 'edit' : 'question',
-    needsState: needs,
-    needsObjects: needs,
-    reason: needs ? '用户在基于现有画板对象提要求，需要状态与对象列表。' : '用户不依赖画板现状也可回答。',
-  };
-}
-
-app.post('/api/intent', async (req, res) => {
-  const BodySchema = z.object({
-    text: z.string().min(1),
-    hasObjects: z.boolean().optional().default(false),
-  });
-  const parsed = BodySchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Invalid request body', details: parsed.error.flatten() });
-  }
-  const { text, hasObjects } = parsed.data;
-
-  // If no models available, fall back to heuristic.
-  if (endpointModels.length === 0) {
-    return res.json(heuristicIntent(text, hasObjects));
-  }
-
-  const p = pickIntentModel();
-  try {
-    if (!p) return res.json(heuristicIntent(text, hasObjects));
-    const system =
-      '你是一个意图路由器，用于决定是否要把 GeoGebra 画板状态附加给主模型。' +
-      '输入包含用户文本和画板是否已有对象。' +
-      '如果用户在讨论/修改/引用现有图（包括提到点名如A/B/C/E、说“这个/刚才/上面”、说移动/调整），needsState/needsObjects 应为 true。' +
-      '如果用户是纯概念问答且不依赖现有图，needsState/needsObjects 为 false。' +
-      '输出严格为 JSON。';
-    const prompt = `UserText: ${text}\nCanvasHasObjects: ${hasObjects}\nReturn JSON.`;
-    const timeoutMs = Number(process.env.INTENT_TIMEOUT_MS || 2500);
-    const { object } = await generateObject({
-      model: p.model,
-      schema: INTENT_SCHEMA,
-      system,
-      prompt,
-      abortSignal: AbortSignal.timeout(timeoutMs),
-    });
-    return res.json(object);
-  } catch (e) {
-    // If intent model fails, fall back to heuristic.
-    return res.json(heuristicIntent(text, hasObjects));
-  }
-});
-
 // New chat endpoint: accepts full message history (session-only) and returns explanation + commands.
 app.post('/api/chat', async (req, res) => {
   const reqId = crypto.randomUUID();
@@ -1136,7 +1029,6 @@ app.post('/api/chat', async (req, res) => {
     phase: z.string().optional(),
     preferences: z.string().optional(),
     codexTabId: z.string().optional(),
-    canvasState: z.string().optional(), // optional text summary of current canvas/objects for model感知
   });
 
   const parsed = BodySchema.safeParse(req.body);
@@ -1153,8 +1045,7 @@ app.post('/api/chat', async (req, res) => {
     });
   }
 
-  const { messages, endpointId, mode = 'auto', phase: phaseRaw, preferences = '', codexTabId, canvasState } = parsed.data;
-  GLOBAL_CANVAS_STATE = canvasState || '';
+  const { messages, endpointId, mode = 'auto', phase: phaseRaw, preferences = '', codexTabId } = parsed.data;
   const phase = typeof phaseRaw === 'string' && phaseRaw.trim().length > 0 ? phaseRaw.trim() : 'draw';
   const promptBundle = buildPromptBundle(phase, preferences);
   const cbHits = searchCommandbook(messages);
@@ -1181,7 +1072,32 @@ app.post('/api/chat', async (req, res) => {
       return false;
     }
   });
-  const wantsCanvasStateViaTool = Boolean(!hasCanvasStateToolResult && !canvasState && shouldForceCanvasStateTool(lastUserText));
+
+  // Stability-first preflight: if the user is referencing the existing drawing and we don't have canvas context yet,
+  // ask the client to run get_canvas_state() before we call any model.
+  if (!hasCanvasStateToolResult && shouldForceCanvasStateTool(lastUserText)) {
+    return res.json({
+      kind: 'tool_request',
+      response: null,
+      toolRequest: {
+        toolCalls: [
+          {
+            type: 'tool-call',
+            toolCallId: `server_${crypto.randomUUID()}`,
+            toolName: 'get_canvas_state',
+            input: {},
+          },
+        ],
+      },
+      usedEndpointId: 'server-preflight',
+      usedModelId: null,
+      usedProvider: 'local',
+      usedLabel: 'server-preflight',
+      debugTrace: [],
+      promptVersion,
+      toolCalls: null,
+    });
+  }
 
   // For core teaching scenarios, prefer deterministic local fallback first to avoid model-specific DSL drift.
   // Only apply when the client did NOT explicitly choose an endpoint (so "GLM main" tests won't be bypassed).
@@ -1233,12 +1149,6 @@ app.post('/api/chat', async (req, res) => {
       },
     ],
   });
-
-  // Optional: inline the canvas state as a user message (default OFF; prefer tool-calling).
-  const inlineCanvasState = String(process.env.LLM_INLINE_CANVAS_STATE || '').toLowerCase() === 'true';
-  if (inlineCanvasState && canvasState && canvasState.trim().length > 0) {
-    modelMessages.push({ role: 'user', content: [{ type: 'text', text: `CANVAS_STATE:\n${canvasState}` }] });
-  }
 
   const enabled = endpointModels;
   if (endpointId && !enabled.find((e) => e.id === endpointId)) {
@@ -1324,6 +1234,32 @@ app.post('/api/chat', async (req, res) => {
         }
 
         const sanitized = sanitizeGgbResponse(object);
+        const pseudoRequestedCanvas = Array.isArray(sanitized.removedToolCommands)
+          ? sanitized.removedToolCommands.some((s) => /^\s*get_canvas_state\b/i.test(String(s || '')))
+          : false;
+        if (pseudoRequestedCanvas && !hasCanvasStateToolResult) {
+          return res.json({
+            kind: 'tool_request',
+            response: null,
+            toolRequest: {
+              toolCalls: [
+                {
+                  type: 'tool-call',
+                  toolCallId: `server_${crypto.randomUUID()}`,
+                  toolName: 'get_canvas_state',
+                  input: {},
+                },
+              ],
+            },
+            usedEndpointId: 'server-preflight',
+            usedModelId: null,
+            usedProvider: 'local',
+            usedLabel: 'server-preflight',
+            debugTrace,
+            promptVersion,
+            toolCalls: providerToolCalls,
+          });
+        }
         const normalized = {
           explanation: sanitized.explanation,
           commands: sanitized.commands,
@@ -1461,23 +1397,12 @@ app.post('/api/chat', async (req, res) => {
               messages: modelMessages,
               maxRetries: compatMaxRetries,
               timeoutMs,
-              // Stability first: when we don't expect frontend tools, force the final tool.
-              // When we expect frontend tools, allow the model to call them (toolChoice=auto) and stop on tool_request.
-              toolChoice: wantsCanvasStateViaTool ? 'auto' : { type: 'tool', toolName: GGB_TOOL_NAME },
-              prepareStep: wantsCanvasStateViaTool
-                ? ({ steps }) => {
-                  if (!steps || steps.length === 0) {
-                    return {
-                      toolChoice: { type: 'tool', toolName: 'get_canvas_state' },
-                      activeTools: ['get_canvas_state'],
-                    };
-                  }
-                  return {
-                    toolChoice: 'auto',
-                    activeTools: [GGB_TOOL_NAME, 'get_canvas_state', 'set_corner_text'],
-                  };
-                }
-                : undefined,
+              // Allow the model to call frontend tools; we'll stop and ask the client to execute them via kind=tool_request.
+              toolChoice: 'auto',
+              prepareStep: () => ({
+                toolChoice: 'auto',
+                activeTools: [GGB_TOOL_NAME, 'get_canvas_state', 'set_corner_text'],
+              }),
             });
             if (toolResult.toolRequest) {
               attempt.ok = true;
@@ -1530,20 +1455,10 @@ app.post('/api/chat', async (req, res) => {
                 maxRetries: compatMaxRetries,
                 timeoutMs,
                 toolChoice: 'auto',
-                prepareStep: wantsCanvasStateViaTool
-                  ? ({ steps }) => {
-                    if (!steps || steps.length === 0) {
-                      return {
-                        toolChoice: { type: 'tool', toolName: 'get_canvas_state' },
-                        activeTools: ['get_canvas_state'],
-                      };
-                    }
-                    return {
-                      toolChoice: 'auto',
-                      activeTools: [GGB_TOOL_NAME, 'get_canvas_state', 'set_corner_text'],
-                    };
-                  }
-                  : undefined,
+                prepareStep: () => ({
+                  toolChoice: 'auto',
+                  activeTools: [GGB_TOOL_NAME, 'get_canvas_state', 'set_corner_text'],
+                }),
               });
               if (result.toolRequest) {
                 attempt.ok = true;
@@ -1599,8 +1514,6 @@ app.post('/api/chat', async (req, res) => {
             system: promptText,
             messages: modelMessages,
             abortSignal: AbortSignal.timeout(timeoutMs),
-            tools: buildTools({ canvasState }),
-            toolChoice: 'auto',
           });
           object = resp.object;
           usage = resp.usage || null;
@@ -1617,6 +1530,32 @@ app.post('/api/chat', async (req, res) => {
         }
 
         const sanitized = sanitizeGgbResponse(object);
+        const pseudoRequestedCanvas = Array.isArray(sanitized.removedToolCommands)
+          ? sanitized.removedToolCommands.some((s) => /^\s*get_canvas_state\b/i.test(String(s || '')))
+          : false;
+        if (pseudoRequestedCanvas && !hasCanvasStateToolResult) {
+          return res.json({
+            kind: 'tool_request',
+            response: null,
+            toolRequest: {
+              toolCalls: [
+                {
+                  type: 'tool-call',
+                  toolCallId: `server_${crypto.randomUUID()}`,
+                  toolName: 'get_canvas_state',
+                  input: {},
+                },
+              ],
+            },
+            usedEndpointId: 'server-preflight',
+            usedModelId: null,
+            usedProvider: 'local',
+            usedLabel: 'server-preflight',
+            debugTrace,
+            promptVersion,
+            toolCalls: providerToolCalls,
+          });
+        }
         const normalized = {
           explanation: sanitized.explanation,
           commands: sanitized.commands,
@@ -1753,76 +1692,6 @@ app.post('/api/chat', async (req, res) => {
     details: String(lastErr?.message || lastErr || ''),
     debugTrace,
     promptVersion,
-  });
-});
-
-app.post('/api/ggb', async (req, res) => {
-  const BodySchema = z.object({
-    prompt: z.string().min(1),
-    errorContext: z.string().optional(),
-    endpointId: z.string().optional(),
-    mode: z.enum(['auto', 'one']).optional(),
-  });
-
-  const parsed = BodySchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Invalid request body', details: parsed.error.flatten() });
-  }
-
-  if (endpointError) {
-    return res.status(500).json({ error: `No LLM endpoint is configured: ${endpointError}` });
-  }
-
-  if (endpointModels.length === 0) {
-    return res.status(500).json({
-      error: 'No LLM endpoint is configured. Please set LLM_ENDPOINTS_JSON in .env.local and restart.',
-    });
-  }
-
-  const { prompt, errorContext, endpointId, mode = 'auto' } = parsed.data;
-  const userPrompt = errorContext
-    ? `The following commands failed in GeoGebra:\n${errorContext}\n\nPlease fix them and provide the full corrected command sequence for the original request: "${prompt}"`
-    : prompt;
-
-  const enabled = endpointModels;
-  if (endpointId && !enabled.find((e) => e.id === endpointId)) {
-    return res.status(400).json({ error: `Unknown endpointId: ${endpointId}` });
-  }
-  const ordered = computeOrderedEndpoints(enabled, endpointId, mode);
-
-  let lastError = null;
-  const repairPrompt = buildPromptBundle('repair');
-  const timeoutMs = Number(process.env.LLM_TIMEOUT_MS || 20000);
-  const defaultMaxRetries = Number(process.env.LLM_MAX_RETRIES || 2);
-  const compatMaxRetries = Number(process.env.LLM_COMPAT_MAX_RETRIES || 0);
-  for (const p of ordered) {
-    try {
-      const { object } = await generateObject({
-        model: p.model,
-        schema: GGB_SCHEMA,
-        maxRetries: p.provider === 'openai-compatible' ? compatMaxRetries : defaultMaxRetries,
-        experimental_repairText: repairJsonObjectText,
-        system: repairPrompt.text,
-        prompt: userPrompt,
-        abortSignal: AbortSignal.timeout(timeoutMs),
-      });
-
-      const normalized = {
-        explanation: object.explanation,
-        commands: normalizeCommandsField(object.commands),
-        overlayText: object.overlayText || undefined,
-      };
-
-      return res.json({ response: normalized, usedEndpointId: p.id });
-    } catch (e) {
-      lastError = e;
-      console.warn(`[API] Endpoint ${p.id} failed, trying next... ${formatErrorForLog(e)}`);
-    }
-  }
-
-  return res.status(502).json({
-    error: 'All LLM endpoints failed.',
-    details: String(lastError?.message || lastError || ''),
   });
 });
 

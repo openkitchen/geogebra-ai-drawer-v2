@@ -38,5 +38,4 @@
 - 为加速启动，服务端会通过 `-c mcp_servers={}` 关闭 MCP。仅建议用于本机开发/调试环境。
 
 ### Kimi 小模型的使用边界
-- `moonshot-v1-8k` 等小模型默认仅用于 `/api/intent` 这类“意图识别/轻任务”。
 - 主对话 `/api/chat` 默认不会把小模型当作真实回答模型；如需允许 Kimi 在 chat 内部做“快 fallback”，必须显式设置：`KIMI_ALLOW_CHAT_FALLBACK_MODEL=true`。
