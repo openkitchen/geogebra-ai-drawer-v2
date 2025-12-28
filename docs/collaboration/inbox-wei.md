@@ -2,4 +2,4 @@
 
 | Date | From | Task ID | Message | Status |
 | ---- | ---- | ------- | ------- | ------ |
-| 2025-12-25 | codex-B | 002 | 设计 commandbook 注入 hook：计划在 server/index.mjs 增加 errorContext→检索→追加 system prompt 的中间层；需确认 prompt 体积上限与优先模型 | new |
+| 2025-12-25 | codex-B | 002 | commandbook 注入 hook 已落地为：errorContext→token→commandbook hints（限量 0-3 条）并拼入 system prompt（见 todo 002 继续完善）；当前以“控制 prompt 体积”为主，不依赖额外小模型 | done |
