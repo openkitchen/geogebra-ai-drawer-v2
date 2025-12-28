@@ -8,7 +8,7 @@
 | ID  | Title | Owner | Status | DependsOn | LastUpdated | Notes |
 | --- | ----- | ----- | ------ | --------- | ----------- | ----- |
 | 001 | 建立 commandbook（常用命令签名+示例） | codex-A | backlog | - | 2025-12-25 | 初始条目包含 Text/Polygon/SetColor/Angle/Circle |
-| 002 | 记录执行错误并自动注入 commandbook | codex-B | in-progress | 001 | 2025-12-25 | server hook：根据 errorContext 检索注入 system prompt；codex-B 正在设计最小实现 |
+| 002 | 记录执行错误并自动注入 commandbook | codex-B | review | 001 | 2025-12-28 | 已落地 server hook：errorContext(tool)→token→commandbook hints（限量 0-3 条）注入 system prompt；等待 001 命令库条目完善后再验收 |
 | 003 | 扩充自测用例（签名纠正/降级路径） | codex-A | backlog | 001 | 2025-12-25 | 在 docs/self-test.md 增补 3-5 条场景 |
 | 004 | 决策：色值 0..1 vs 0..255 归一策略 | wei | backlog | - | 2025-12-25 | 记录到 decision-log.md，统一前后端参数约定 |
 | 005 | Reflection: 轴/网格命令失败 & 提示修正 | codex-B | in-progress | - | 2025-12-26 | 落盘错误日志 + 修正 SetAxesVisible/SetGridVisible 提示，补自测 |
