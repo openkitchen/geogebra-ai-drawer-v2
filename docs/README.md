@@ -14,6 +14,7 @@
 - `docs/spec/model-routing.md`: 多模型路由与降级（Auto 优先 Kimi）、本地兜底
 - `docs/spec/debug-selftest.md`: Debug Panel、自测用例格式、验收方式
 - `docs/spec/diagram-quality.md`: “可读性”与“教学直观性”的验收标准
+- `docs/spec/agent-skills.md`: Codex Skills（工作流包）的约定、安装与清单
 - `prompts/geogebra-constraints.md`: 关键 GeoGebra 约束补充（内角优先等）
 
 ### 任务（Tasks）

@@ -26,3 +26,4 @@
 | 017 | 服务端模块化拆分（index.mjs 拆分 router/llm/prompt/cache/tools） | codex-B | backlog | 015 | 2025-12-28 | 016 已完成，剩余依赖为 015；降低 god-file 风险；小步迁移，确保 build+自测通过 |
 | 018 | 前端模块化拆分（App.tsx 拆分 chatRunner/toolRunner/ggbExecutor） | codex-B | backlog | 015 | 2025-12-28 | 依赖不变；降低 App.tsx 复杂度，减少回归概率；保持行为不变为第一原则 |
 | 019 | 统一 overlay 路径（overlayText vs set_corner_text） | codex-B | backlog | 015 | 2025-12-28 | 依赖不变；明确主路径与降级路径，减少模型行为不确定性与文档困惑 |
+| 020 | 新增 Codex skill：refactor-arch（并纳入 docs 索引） | codex-B | done | - | 2025-12-28 | 仓库内：`skills/refactor-arch/SKILL.md`；安装说明见 `docs/spec/agent-skills.md` |
