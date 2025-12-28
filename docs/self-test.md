@@ -17,6 +17,10 @@
 - 主力模型：**GLM 4.7 (Packy)**（endpointId=`packy-glm47`）。
 - 降级策略：当 **GLM 后端报错/超时** 时，**优先 fallback 到 Kimi**（usedEndpointId 应显示为 `kimi`）。
 
+### 本轮执行记录（2025-12-28）
+- 已验证：浏览器主路径可用（画圆后追问“有哪些对象”会触发 `get_canvas_state` 的 tool runner：`kind=tool_request → TOOL_RESULT → kind=final`，运行记录可见 `llmTurns`）。
+- 已验证：`npm run build` 通过。
+
 ---
 
 ## 验收标准（Pass/Fail）

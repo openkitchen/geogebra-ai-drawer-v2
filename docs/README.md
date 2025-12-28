@@ -2,6 +2,9 @@
 
 这份索引把文档分成三层：**Design（为什么这么做）**、**Spec（要做到什么程度）**、**Tasks（怎么分阶段做）**。后续实现以 Spec 与 Tasks 为准，Design 负责解释取舍与原则；并行协作与流程见 Collaboration。
 
+### 指令（Instructions）
+- `AGENTS.md`: 本仓库的工作约定（语言/流程/自测/文档同步要求等）
+
 ### 设计（Design）
 - `docs/design/overview.md`: 产品目标、用户体验原则、非目标
 - `docs/design/architecture.md`: 系统架构与关键数据流（LLM ⇄ GeoGebra ⇄ UI）
