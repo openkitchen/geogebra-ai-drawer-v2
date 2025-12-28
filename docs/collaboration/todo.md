@@ -20,9 +20,9 @@
 | 011 | 聊天窗口可观测性：显示 tool 使用/重试记录（默认折叠） | codex-B | done | 006 | 2025-12-27 | 在对话中追加“运行记录”折叠块：展示 toolCalls / fallback / retry / rollback 等摘要与详情（自测通过） |
 | 012 | 聊天窗口：pending 时显示 thinking... | codex-B | done | - | 2025-12-27 | 发送后未返回时，在对话区显示一条临时 assistant bubble：thinking...（自测通过） |
 | 013 | 新增工具：set_corner_text（画布四角固定提示文字） | codex-B | done | 011 | 2025-12-27 | 服务端新增 tool + 协议字段；前端渲染 overlay；模型可调用 tool 更新角落提示（自测通过） |
-| 014 | 通用工具调用（前端执行 tool runner，多轮 HTTP） | codex-B | done | 007,008 | 2025-12-27 | 已实现 kind=tool_request → 前端执行工具并回传 TOOL_RESULT → kind=final；浏览器自测通过；build 通过 |
+| 014 | 通用工具调用（前端执行 tool runner，多轮 HTTP） | codex-B | done | 007,008 | 2025-12-28 | 主链路已收敛为 kind=tool_request → TOOL_RESULT → kind=final；并已移除旧 token/直传 state 与 /api/ggb。 |
 | 015 | 协议收敛：/api/chat 版本化响应（kind/tool_request/tool_result） | codex-B | backlog | 014 | 2025-12-27 | 引入共享类型与 zod 输出校验，避免前后端/文档漂移；为后续模块化重构提供回归面 |
 | 016 | 下线 /api/ggb，统一走 /api/chat | codex-B | done | 014 | 2025-12-28 | 已删除 `/api/ggb` 旧路由，统一走 `/api/chat`（kind=final/tool_request）。 |
-| 017 | 服务端模块化拆分（index.mjs 拆分 router/llm/prompt/cache/tools） | codex-B | backlog | 015,016 | 2025-12-27 | 降低 god-file 风险；小步迁移，确保 build+自测通过 |
-| 018 | 前端模块化拆分（App.tsx 拆分 chatRunner/toolRunner/ggbExecutor） | codex-B | backlog | 015 | 2025-12-27 | 降低 App.tsx 复杂度，减少回归概率；保持行为不变为第一原则 |
-| 019 | 统一 overlay 路径（overlayText vs set_corner_text） | codex-B | backlog | 015 | 2025-12-27 | 明确主路径与降级路径，减少模型行为不确定性与文档困惑 |
+| 017 | 服务端模块化拆分（index.mjs 拆分 router/llm/prompt/cache/tools） | codex-B | backlog | 015 | 2025-12-28 | 016 已完成，剩余依赖为 015；降低 god-file 风险；小步迁移，确保 build+自测通过 |
+| 018 | 前端模块化拆分（App.tsx 拆分 chatRunner/toolRunner/ggbExecutor） | codex-B | backlog | 015 | 2025-12-28 | 依赖不变；降低 App.tsx 复杂度，减少回归概率；保持行为不变为第一原则 |
+| 019 | 统一 overlay 路径（overlayText vs set_corner_text） | codex-B | backlog | 015 | 2025-12-28 | 依赖不变；明确主路径与降级路径，减少模型行为不确定性与文档困惑 |
