@@ -14,7 +14,7 @@ from sse_starlette.sse import EventSourceResponse
 from .debug_trace import trace_exception, trace_http, trace_sse
 from .llm_decider import load_llm_config
 from .protocol_v2 import PROTOCOL_VERSION, ToolResumePayload, get_protocol_schema_v2
-from .runtime_graph import graph
+from .runtime_graph import graph_local as graph
 
 
 @dataclass

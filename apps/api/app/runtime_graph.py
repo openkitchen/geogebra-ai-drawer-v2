@@ -948,4 +948,10 @@ _builder.add_conditional_edges(
 _builder.add_edge(START, "act_node")
 _builder.add_edge("frontend_tool_node", "act_node")
 
-graph = _builder.compile(checkpointer=_checkpointer)
+# `graph` is the entrypoint used by LangGraph Studio (langgraph dev). The runtime platform
+# provides persistence automatically, so we must not attach a custom checkpointer here.
+graph = _builder.compile()
+
+# Our in-app FastAPI server uses an in-memory checkpointer so that interrupt/resume and
+# /state endpoints work in local dev.
+graph_local = _builder.compile(checkpointer=_checkpointer)
