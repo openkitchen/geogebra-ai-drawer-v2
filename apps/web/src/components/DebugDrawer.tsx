@@ -46,6 +46,21 @@ export function DebugDrawer({ isOpen, onClose, ggbApi }: DebugDrawerProps) {
     }
   }
 
+  const togglePerspective = (code: string) => {
+    if (ggbApi && ggbApi.setPerspective) {
+      ggbApi.setPerspective(code);
+    }
+  };
+
+  const toggleOption = (option: 'algebra' | 'spreadsheet') => {
+    if (!ggbApi) return;
+    // Note: GeoGebra JS API doesn't have direct toggle setters for everything, 
+    // but perspective strings are the reliable way. 
+    // 'G' = Geometry (no algebra), 'A' = Algebra + Graphics
+    // Or we can use `showAlgebraInput(bool)` if exposed, but standard API uses perspectives.
+    // For simplicity, let's expose buttons to switch standard perspectives.
+  };
+
   return (
     <div className={`debug-drawer ${!isOpen ? 'closed' : ''}`}>
       <div className="debug-header">
@@ -55,6 +70,26 @@ export function DebugDrawer({ isOpen, onClose, ggbApi }: DebugDrawerProps) {
         </button>
       </div>
       <div className="debug-content">
+        
+        {/* GeoGebra Controls */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>GeoGebra UI</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="secondary" style={{ fontSize: 11 }} onClick={() => togglePerspective('G')}>
+              Geometry (Clean)
+            </button>
+            <button className="secondary" style={{ fontSize: 11 }} onClick={() => togglePerspective('A')}>
+              Algebra (Formulas)
+            </button>
+            <button className="secondary" style={{ fontSize: 11 }} onClick={() => togglePerspective('S')}>
+              Spreadsheet
+            </button>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 11, color: '#64748b' }}>
+            Use these to inspect internal state or formulas.
+          </div>
+        </div>
+
         {/* Canvas Inspector */}
         <div style={{ marginBottom: 24 }}>
           <CanvasInspector ggbApi={ggbApi} />

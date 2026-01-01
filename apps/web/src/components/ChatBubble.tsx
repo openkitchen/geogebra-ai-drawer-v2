@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { ChatMessage } from '../types';
 import { RunStreamEvent } from '../sse';
 
@@ -23,6 +23,25 @@ function extractRunInfo(events: RunStreamEvent[]) {
 export function ChatBubble({ message, devMode }: ChatBubbleProps) {
   const isUser = message.role === 'user';
   const [showTrace, setShowTrace] = useState(false);
+  const events = message.role === 'assistant' ? message.events : null;
+
+  // Extract useful info for trace summary
+  const toolUsage = useMemo(() => {
+    if (!events || events.length === 0) return null;
+    const tools = events
+      .filter(e => e.event === 'tool_start')
+      .map(e => (e as any).data.tool_name);
+    return tools.length > 0 ? `Tools: ${tools.join(', ')}` : null;
+  }, [events]);
+
+  const thoughtProcess = useMemo(() => {
+    if (!events || events.length === 0) return '';
+    const thoughts = events
+      .filter(e => e.event === 'token' || e.event === 'plan_update')
+      .map(e => e.event === 'token' ? e.data.text_delta : '[Plan Update]')
+      .join('');
+    return thoughts.length > 50 ? thoughts.slice(0, 50) + '...' : thoughts;
+  }, [events]);
 
   if (isUser) {
     return (
@@ -39,11 +58,73 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
   // Assistant Logic
   const isThinking = message.status === 'running';
   const hasError = message.status === 'error';
-  const runInfo = extractRunInfo(message.events);
+  const runInfo = events && events.length > 0 ? extractRunInfo(events) : null;
 
   return (
     <div className="bubble-row assistant">
       <div className="bubble assistant">
+        {/* Dev Mode Trace Info (Folded by default) - Always show if devMode is on, even if events is empty */}
+        {devMode && (
+          <div className="trace-details">
+            <div
+              className="trace-summary"
+              onClick={() => setShowTrace(!showTrace)}
+              style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#64748b' }}
+            >
+              <span style={{ fontSize: 9 }}>{showTrace ? '▼' : '▶'}</span>
+              <span>
+                <strong>Run:</strong> {runInfo ? shortId(runInfo.runId) : '...'} 
+                {toolUsage ? ` · ${toolUsage}` : events && events.length > 0 ? ` · ${events.length} events` : ' · No events'}
+              </span>
+            </div>
+
+            {showTrace && (
+              <div className="trace-log" style={{ marginTop: 8, padding: 8, background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 11, overflowX: 'auto' }}>
+                {!events || events.length === 0 ? (
+                  <div style={{ color: '#64748b', fontStyle: 'italic' }}>No events recorded for this message.</div>
+                ) : (
+                  <>
+                    {runInfo && (
+                      <div style={{ marginBottom: 12, paddingBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', alignItems: 'center' }}>
+                          <strong style={{ color: '#475569' }}>Run ID:</strong> 
+                          <code style={{ userSelect: 'all' }}>{runInfo.runId}</code>
+                          
+                          <strong style={{ color: '#475569' }}>Thread ID:</strong> 
+                          <code style={{ userSelect: 'all' }}>{runInfo.threadId}</code>
+                        </div>
+                        <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                          <button className="secondary" style={{ padding: '2px 6px', fontSize: 10 }} onClick={() => navigator.clipboard.writeText(runInfo.runId)}>Copy Run ID</button>
+                          <button className="secondary" style={{ padding: '2px 6px', fontSize: 10 }} onClick={() => navigator.clipboard.writeText(JSON.stringify(events, null, 2))}>Copy Full Log</button>
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {events.map((ev, idx) => {
+                        if (ev.event === 'token') return null; // Skip raw tokens to reduce noise
+                        return (
+                          <div key={idx} style={{ fontFamily: 'monospace', color: '#334155' }}>
+                            <span style={{ color: '#94a3b8', marginRight: 6 }}>[{ev.event}]</span>
+                            {'tool_name' in ev.data ? (
+                              <span style={{ color: '#0f172a', fontWeight: 500 }}>{ev.data.tool_name}</span>
+                            ) : 'answer' in ev.data ? (
+                              <span style={{ color: '#16a34a' }}>Final Answer</span>
+                            ) : null}
+                            {'input' in ev.data ? (
+                              <span style={{ color: '#64748b', marginLeft: 6 }}>{JSON.stringify((ev.data as any).input).slice(0, 40)}...</span>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="content">
           {message.text ? (
             <div style={{ whiteSpace: 'pre-wrap' }}>{message.text}</div>
@@ -63,53 +144,7 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
             </div>
           )}
         </div>
-
-        {/* Dev Mode Trace Info */}
-        {devMode && message.events.length > 0 && (
-          <div className="trace-details">
-            <div 
-              className="trace-summary" 
-              onClick={() => setShowTrace(!showTrace)}
-            >
-              <span>{showTrace ? '▼' : '▶'}</span>
-              <span>
-                Trace Info 
-                {runInfo ? ` (Run: ${shortId(runInfo.runId)})` : ''} 
-                · {message.events.length} events
-              </span>
-            </div>
-            
-            {showTrace && (
-              <div className="trace-log">
-                {runInfo && (
-                  <div style={{ marginBottom: 4 }}>
-                    <strong>Run ID:</strong> {runInfo.runId}<br/>
-                    <strong>Thread ID:</strong> {runInfo.threadId}
-                  </div>
-                )}
-                {/* Simple event summary list */}
-                {message.events.map((ev, idx) => (
-                  <div key={idx} style={{ marginBottom: 2 }}>
-                    <span style={{ color: '#64748b' }}>[{ev.event}]</span> 
-                    {'tool_name' in ev.data ? ` ${ev.data.tool_name}` : ''}
-                    {'answer' in ev.data ? ` (final answer)` : ''}
-                  </div>
-                ))}
-                <div style={{ marginTop: 8 }}>
-                  <button 
-                    className="secondary" 
-                    style={{ fontSize: 10, padding: '2px 6px' }}
-                    onClick={() => navigator.clipboard.writeText(JSON.stringify(message.events, null, 2))}
-                  >
-                    Copy Full JSON
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );
 }
-

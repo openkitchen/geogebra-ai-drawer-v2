@@ -510,6 +510,210 @@ def _compact_exec_commands(tool_results: list[dict[str, Any]] | None) -> list[st
     return []
 
 
+def _json_compact(value: Any, *, max_chars: int = 2400) -> str:
+    try:
+        s = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        s = str(value)
+    if len(s) <= max_chars:
+        return s
+    return s[:max_chars] + "…"
+
+
+def _extract_latest_canvas_objects_raw(tool_results: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if not tool_results:
+        return []
+
+    for entry in reversed(tool_results):
+        if entry.get("tool_name") != "get_canvas_state":
+            continue
+        resume = entry.get("resume")
+        if not isinstance(resume, dict) or resume.get("ok") is not True:
+            continue
+        output = resume.get("output")
+        if not isinstance(output, dict):
+            continue
+        objects = output.get("objects")
+        if not isinstance(objects, list):
+            continue
+        return [o for o in objects if isinstance(o, dict)]
+
+    return []
+
+
+def _count_canvas_object_types(objects: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for obj in objects:
+        typ = obj.get("type")
+        if not isinstance(typ, str) or not typ.strip():
+            continue
+        key = typ.strip().lower()
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _compact_action_ledger(tool_results: list[dict[str, Any]] | None, *, max_actions: int = 6) -> list[dict[str, Any]]:
+    if not tool_results:
+        return []
+
+    actions: list[dict[str, Any]] = []
+    for entry in reversed(tool_results):
+        tool_name = entry.get("tool_name")
+        if tool_name not in {"exec_geogebra_commands", "delete_objects"}:
+            continue
+
+        resume = entry.get("resume")
+        ok = isinstance(resume, dict) and resume.get("ok") is True
+        output = resume.get("output") if isinstance(resume, dict) else None
+
+        action: dict[str, Any] = {
+            "run_id": entry.get("run_id"),
+            "tool_name": tool_name,
+            "tool_call_id": entry.get("tool_call_id"),
+            "ok": ok,
+        }
+
+        if tool_name == "exec_geogebra_commands":
+            inp = entry.get("input")
+            if isinstance(inp, dict) and isinstance(inp.get("commands"), list):
+                action["commands_preview"] = [str(x) for x in inp.get("commands", [])[:8]]
+
+            if ok and isinstance(output, dict):
+                created = output.get("created_objects")
+                deleted = output.get("deleted_objects")
+                dialogs = output.get("dialogs")
+                warnings = output.get("quality_warnings")
+                if isinstance(created, list):
+                    action["created_objects"] = [str(x) for x in created if isinstance(x, str) and x.strip()][:30]
+                if isinstance(deleted, list):
+                    action["deleted_objects"] = [str(x) for x in deleted if isinstance(x, str) and x.strip()][:30]
+                if isinstance(dialogs, list):
+                    action["dialogs"] = [str(x) for x in dialogs if isinstance(x, str) and x.strip()][:6]
+                if isinstance(warnings, list):
+                    action["quality_warnings"] = [str(x) for x in warnings if isinstance(x, str) and x.strip()][:6]
+
+        if tool_name == "delete_objects" and ok and isinstance(output, dict):
+            deleted = output.get("deleted_objects")
+            failed = output.get("failed_objects")
+            if isinstance(deleted, list):
+                action["deleted_objects"] = [str(x) for x in deleted if isinstance(x, str) and x.strip()][:60]
+            if isinstance(failed, list):
+                action["failed_objects_count"] = len([x for x in failed if isinstance(x, dict)])
+
+        actions.append(action)
+        if len(actions) >= max_actions:
+            break
+
+    actions.reverse()
+    return actions
+
+
+def _build_created_by_map(action_ledger: list[dict[str, Any]]) -> dict[str, str]:
+    created_by: dict[str, str] = {}
+    for action in action_ledger:
+        run_id = action.get("run_id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            continue
+        created = action.get("created_objects")
+        if not isinstance(created, list):
+            continue
+        for name in created:
+            if isinstance(name, str) and name.strip():
+                created_by.setdefault(name.strip(), run_id.strip())
+    return created_by
+
+
+def _build_object_provenance(*, canvas_objects: list[dict[str, Any]], action_ledger: list[dict[str, Any]]) -> dict[str, str]:
+    created_by = _build_created_by_map(action_ledger)
+    out: dict[str, str] = {}
+    for obj in canvas_objects:
+        name = obj.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        out[name.strip()] = created_by.get(name.strip(), "unknown")
+    return out
+
+
+def _extract_canvas_diff(tool_results: list[dict[str, Any]] | None, *, max_names: int = 20) -> dict[str, Any] | None:
+    if not tool_results:
+        return None
+
+    latest_entry: dict[str, Any] | None = None
+    latest_objects: list[dict[str, Any]] | None = None
+    for entry in reversed(tool_results):
+        if entry.get("tool_name") != "get_canvas_state":
+            continue
+        resume = entry.get("resume")
+        if not isinstance(resume, dict) or resume.get("ok") is not True:
+            continue
+        output = resume.get("output")
+        if not isinstance(output, dict) or not isinstance(output.get("objects"), list):
+            continue
+        latest_entry = entry
+        latest_objects = [o for o in output.get("objects", []) if isinstance(o, dict)]
+        break
+
+    if latest_entry is None or latest_objects is None:
+        return None
+
+    latest_run_id = latest_entry.get("run_id")
+
+    prev_objects: list[dict[str, Any]] | None = None
+    for entry in reversed(tool_results):
+        if entry is latest_entry:
+            continue
+        if entry.get("tool_name") != "get_canvas_state":
+            continue
+        if latest_run_id and entry.get("run_id") == latest_run_id:
+            continue
+        resume = entry.get("resume")
+        if not isinstance(resume, dict) or resume.get("ok") is not True:
+            continue
+        output = resume.get("output")
+        if not isinstance(output, dict) or not isinstance(output.get("objects"), list):
+            continue
+        prev_objects = [o for o in output.get("objects", []) if isinstance(o, dict)]
+        break
+
+    if prev_objects is None:
+        return None
+
+    def compact(o: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "name": o.get("name"),
+            "type": o.get("type"),
+            "visible": o.get("visible"),
+            "valueString": o.get("valueString"),
+            "definitionString": o.get("definitionString"),
+        }
+
+    prev_by_name = {str(o.get("name")): compact(o) for o in prev_objects if isinstance(o.get("name"), str)}
+    latest_by_name = {str(o.get("name")): compact(o) for o in latest_objects if isinstance(o.get("name"), str)}
+
+    prev_names = set(prev_by_name.keys())
+    latest_names = set(latest_by_name.keys())
+
+    new_names = sorted(list(latest_names - prev_names))[:max_names]
+    removed_names = sorted(list(prev_names - latest_names))[:max_names]
+
+    changed: list[dict[str, Any]] = []
+    for name in sorted(list(prev_names & latest_names)):
+        a = prev_by_name.get(name) or {}
+        b = latest_by_name.get(name) or {}
+        fields = ["type", "visible", "valueString", "definitionString"]
+        changed_fields = [f for f in fields if a.get(f) != b.get(f)]
+        if changed_fields:
+            changed.append({"name": name, "changed_fields": changed_fields})
+        if len(changed) >= max_names:
+            break
+
+    return {
+        "new_objects": new_names,
+        "removed_objects": removed_names,
+        "changed_objects": changed,
+    }
+
+
 @lru_cache(maxsize=8)
 def _load_prompt_asset(rel_path: str) -> str:
     root = _repo_root()
@@ -641,6 +845,11 @@ def generate_geogebra_commands(
 
     remaining = max(0, int(tool_calls_limit) - int(tool_calls_used))
     canvas_objects = _compact_canvas_objects(tool_results)
+    raw_objects = _extract_latest_canvas_objects_raw(tool_results)
+    object_type_counts = _count_canvas_object_types(raw_objects)
+    action_ledger = _compact_action_ledger(tool_results)
+    object_provenance = _build_object_provenance(canvas_objects=canvas_objects, action_ledger=action_ledger)
+    canvas_diff = _extract_canvas_diff(tool_results)
     memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
 
     system_parts: list[str] = [
@@ -663,6 +872,10 @@ def generate_geogebra_commands(
             + f"tool_calls_limit: {tool_calls_limit}\n"
             + f"remaining_tool_calls: {remaining}\n"
             + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+            + f"canvas_object_type_counts: {_json_compact(object_type_counts, max_chars=600)}\n"
+            + f"action_ledger: {_json_compact(action_ledger, max_chars=1400)}\n"
+            + f"object_provenance (for canvas_objects): {_json_compact(object_provenance, max_chars=800)}\n"
+            + (f"canvas_diff (prev turn -> now): {_json_compact(canvas_diff, max_chars=1200)}\n" if canvas_diff else "")
             + f"runtime_feedback: {feedback_text}\n"
         )
     )
@@ -807,6 +1020,11 @@ def generate_final_answer(
 ) -> str | None:
     canvas_objects = _compact_canvas_objects(tool_results)
     executed_commands = _compact_exec_commands(tool_results)
+    raw_objects = _extract_latest_canvas_objects_raw(tool_results)
+    object_type_counts = _count_canvas_object_types(raw_objects)
+    action_ledger = _compact_action_ledger(tool_results)
+    object_provenance = _build_object_provenance(canvas_objects=canvas_objects, action_ledger=action_ledger)
+    canvas_diff = _extract_canvas_diff(tool_results)
     memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
 
     system = SystemMessage(content=_load_prompt_asset("prompts/v2/final_system.md"))
@@ -819,6 +1037,10 @@ def generate_final_answer(
             + f"tool_calls_limit: {tool_calls_limit}\n"
             + f"executed_commands (latest, up to 12): {executed_commands}\n"
             + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+            + f"canvas_object_type_counts: {_json_compact(object_type_counts, max_chars=600)}\n"
+            + f"action_ledger: {_json_compact(action_ledger, max_chars=1400)}\n"
+            + f"object_provenance (for canvas_objects): {_json_compact(object_provenance, max_chars=800)}\n"
+            + (f"canvas_diff (prev turn -> now): {_json_compact(canvas_diff, max_chars=1200)}\n" if canvas_diff else "")
         )
     )
 
@@ -943,6 +1165,11 @@ def decide_next_step(
 
     remaining = max(0, int(tool_calls_limit) - int(tool_calls_used))
     canvas_objects = _compact_canvas_objects(tool_results)
+    raw_objects = _extract_latest_canvas_objects_raw(tool_results)
+    object_type_counts = _count_canvas_object_types(raw_objects)
+    action_ledger = _compact_action_ledger(tool_results)
+    object_provenance = _build_object_provenance(canvas_objects=canvas_objects, action_ledger=action_ledger)
+    canvas_diff = _extract_canvas_diff(tool_results)
     diagnostics = canvas_diagnostics or {}
     repair_hint_text = (repair_hint or "").strip()
     memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
@@ -957,6 +1184,10 @@ def decide_next_step(
             + f"tool_calls_used: {tool_calls_used}\n"
             + f"tool_calls_limit: {tool_calls_limit}\n"
             + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+            + f"canvas_object_type_counts: {_json_compact(object_type_counts, max_chars=600)}\n"
+            + f"action_ledger: {_json_compact(action_ledger, max_chars=1400)}\n"
+            + f"object_provenance (for canvas_objects): {_json_compact(object_provenance, max_chars=800)}\n"
+            + (f"canvas_diff (prev turn -> now): {_json_compact(canvas_diff, max_chars=1200)}\n" if canvas_diff else "")
             + f"canvas_diagnostics: {diagnostics}\n"
             + f"repair_hint: {repair_hint_text}\n"
             "\n"

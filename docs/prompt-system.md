@@ -26,6 +26,27 @@ Goals:
 **Conversation memory summarization** — used by `summarize_memory`:
 - `prompts/v2/memory_summary_system.md`
 
+### LLM Context Pack (v2)
+
+为减少“谁画的/是否自动生成”等归因幻觉，v2 在每轮调用 LLM 时会提供一份**结构化证据包**（而不是把 UI Timeline 原样塞进 prompt）。
+
+当前（2026-01-01）会注入的核心字段包括：
+- `memory_summary`：对话摘要（短）
+- `recent_messages`：最近 N 条对话（截断）
+- `canvas_objects`：最新画板对象摘要（最多 12 个；name/type/value/definition/visible）
+- `canvas_object_type_counts`：画板对象类型计数（circle/point/polygon/…）
+- `action_ledger`：最近 M 次**会改变画板**的工具动作摘要（主要是 `exec_geogebra_commands` / `delete_objects`），含：
+  - `run_id` / `tool_name` / `ok`
+  - `created_objects` / `deleted_objects`
+  - `commands_preview`（仅预览，避免过长）
+- `object_provenance`：对象归因表（仅针对 `canvas_objects` 中出现的对象）：
+  - `name -> created_by_run_id | unknown`
+- `canvas_diff`（可选）：上一轮快照 → 当前快照的差分（new/removed/changed）
+
+实现位置：
+- 后端注入：`apps/api/app/llm_decider.py`
+- 工具结果写入 state：`apps/api/app/runtime_graph.py`（tool_results 带 `run_id`）
+
 ```mermaid
 flowchart TD
   v2sys[prompts/v2/*.md] --> compose[ComposePerNodePrompt]
@@ -75,4 +96,3 @@ end
 - `prompts/packs/*.md`
 - `prompts/scenarios/*.md`
 - `prompts/commandbook.json`
-

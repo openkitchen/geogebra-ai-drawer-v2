@@ -18,6 +18,9 @@ declare global {
     getVisible(objectName: string): boolean;
     deleteObject(objectName: string): boolean;
 
+    setSize?(width: number, height: number): void;
+    setPerspective?(perspectiveCode: string): void; // Added for V2 Debugging
+    setGlobalFontSize?(size: number): void; // Added for compact UI
     setAxesVisible?(xAxis: boolean, yAxis: boolean): void;
     setGridVisible?(visible: boolean): void;
     setLabelVisible?(objectName: string, visible: boolean): void;
@@ -39,6 +42,7 @@ declare global {
     enableShiftDragZoom?: boolean;
     allowUpscale?: boolean;
     scaleContainerClass?: string;
+    perspective?: string;
     appletOnLoad?: GeoGebraAppletOnLoad;
     [key: string]: unknown;
   }

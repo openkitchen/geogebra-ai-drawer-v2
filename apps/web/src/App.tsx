@@ -126,6 +126,9 @@ export default function App() {
             if (ev.event === 'run_end') {
               return { ...m, events: nextEvents, status: 'done' };
             }
+            if (ev.event === 'client_error') {
+              return { ...m, events: nextEvents, status: 'error', error: `HTTP ${ev.data.status}` };
+            }
             return { ...m, events: nextEvents };
           }),
         );
@@ -254,10 +257,8 @@ export default function App() {
           <button 
             className={`secondary ${devMode ? 'active' : ''}`} 
             onClick={() => {
-              const next = !devMode;
-              setDevMode(next);
-              if (next) setDebugDrawerOpen(true);
-              else setDebugDrawerOpen(false);
+              setDevMode(!devMode);
+              // Don't auto-open drawer, let user control it separately
             }}
             title={devMode ? "Exit Developer Mode" : "Enter Developer Mode"}
           >
@@ -265,8 +266,12 @@ export default function App() {
           </button>
           
           {devMode && (
-             <button className="icon-btn" onClick={() => setDebugDrawerOpen(!debugDrawerOpen)}>
-               {debugDrawerOpen ? '→' : '←'}
+             <button 
+               className="secondary" 
+               onClick={() => setDebugDrawerOpen(!debugDrawerOpen)}
+               title={debugDrawerOpen ? "Hide Tools" : "Show Tools"}
+             >
+               {debugDrawerOpen ? 'Tools: ON' : 'Tools'}
              </button>
           )}
         </div>

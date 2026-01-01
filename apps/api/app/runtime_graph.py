@@ -51,14 +51,48 @@ class GraphState(TypedDict, total=False):
 
 def _wants_draw(user_text: str) -> bool:
     lowered = user_text.lower()
-    return (
-        ("画" in user_text)
-        or ("画图" in user_text)
-        or ("作图" in user_text)
-        or ("绘制" in user_text)
-        or ("画出" in user_text)
-        or ("draw" in lowered)
+    # Heuristic intent detection (keep conservative).
+    # We only treat a message as a drawing request when it looks like an instruction,
+    # not when the user is referring to something already drawn (e.g. "你刚才画的...").
+
+    explicit = (
+        "作图",
+        "绘制",
+        "画图",
+        "画出",
+        "画一个",
+        "画个",
+        "画一下",
+        "帮我画",
+        "请画",
+        "给我画",
+        "再画",
+        "继续画",
     )
+    if any(t in user_text for t in explicit) or any(t in lowered for t in ("draw", "plot")):
+        return True
+
+    # Common "meta" queries that mention "画" but are not asking to draw now.
+    meta_markers = (
+        "你画的",
+        "我画的",
+        "刚才画",
+        "之前画",
+        "画了",
+        "画的内容",
+        "是不是你画的",
+        "总结",
+        "解释",
+        "说明",
+    )
+    if any(t in user_text for t in meta_markers):
+        return False
+
+    # Short imperative forms like "画圆/画三角形/画直线".
+    if re.search(r"画(圆|三角形|正方形|矩形|线段|直线|角|函数|抛物线|椭圆|多边形)", user_text):
+        return True
+
+    return False
 
 
 def _user_forbids_drawing(user_text: str) -> bool:
@@ -1053,6 +1087,7 @@ def frontend_tool_node(state: GraphState) -> dict:
     tool_name = state["next_tool_name"]
     tool_call_id = state["next_tool_call_id"]
     tool_input = state.get("next_tool_input", {})
+    run_id = state.get("run_id")
 
     resume_value = interrupt(
         {
@@ -1067,6 +1102,7 @@ def frontend_tool_node(state: GraphState) -> dict:
     prev_results = state.get("tool_results", [])
     next_results = list(prev_results) + [
         {
+            "run_id": run_id,
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,
             "input": tool_input,
