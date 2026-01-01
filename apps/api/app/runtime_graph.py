@@ -14,6 +14,7 @@ from .canvas_diagnostics import compute_canvas_diagnostics
 
 class GraphState(TypedDict, total=False):
     run_id: str
+    ui_debug: bool
     user_text: str
     tool_calls_used: int
     tool_calls_limit: int
@@ -411,6 +412,8 @@ def act_node(state: GraphState) -> dict:
     tool_calls_limit = int(state.get("tool_calls_limit", 3))
     model_calls_used = int(state.get("model_calls_used", 0))
     model_calls_limit = int(state.get("model_calls_limit", 6))
+    run_id = state.get("run_id")
+    ui_debug = bool(state.get("ui_debug"))
     user_text = state.get("user_text") or ""
     remaining = max(0, tool_calls_limit - tool_calls_used)
     attempt = int(state.get("attempt", 0))
@@ -461,6 +464,8 @@ def act_node(state: GraphState) -> dict:
                 tool_calls_used=tool_calls_used,
                 tool_calls_limit=tool_calls_limit,
                 tool_results=state.get("tool_results"),
+                run_id=run_id,
+                ui_debug=ui_debug,
             )
             if answer:
                 return {
@@ -534,6 +539,8 @@ def act_node(state: GraphState) -> dict:
                 tool_calls_used=tool_calls_used,
                 tool_calls_limit=tool_calls_limit,
                 tool_results=state.get("tool_results"),
+                run_id=run_id,
+                ui_debug=ui_debug,
             )
             if answer:
                 return {
@@ -561,6 +568,8 @@ def act_node(state: GraphState) -> dict:
                 tool_calls_limit=tool_calls_limit,
                 tool_results=state.get("tool_results"),
                 runtime_feedback=state.get("repair_feedback") or None,
+                run_id=run_id,
+                ui_debug=ui_debug,
             )
             if commands:
                 return {
@@ -595,6 +604,8 @@ def act_node(state: GraphState) -> dict:
                     tool_calls_limit=tool_calls_limit,
                     tool_results=state.get("tool_results"),
                     runtime_feedback=None,
+                    run_id=run_id,
+                    ui_debug=ui_debug,
                 )
                 if commands:
                     return {
@@ -673,6 +684,8 @@ def act_node(state: GraphState) -> dict:
             tool_calls_used=tool_calls_used,
             tool_calls_limit=tool_calls_limit,
             tool_results=state.get("tool_results"),
+            run_id=run_id,
+            ui_debug=ui_debug,
         )
         if answer:
             return {

@@ -255,6 +255,7 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
         config = {"configurable": {"thread_id": thread_id}}
         input_state = {
             "run_id": run_id,
+            "ui_debug": ui_debug,
             "user_text": body.input.user_text,
             "tool_calls_used": run.tool_calls_used,
             "tool_calls_limit": run.tool_calls_limit,

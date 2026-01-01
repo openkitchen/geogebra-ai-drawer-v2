@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -12,6 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ValidationError, model_validator
 
+from .debug_trace import trace_exception, trace_line
 from .protocol_v2 import (
     DeleteObjectsInput,
     ExecGeogebraCommandsInput,
@@ -53,6 +55,47 @@ class LlmConfig:
     model: str
     temperature: float
     timeout_s: float
+
+
+def _preview_text(value: Any, *, limit: int = 320) -> str | None:
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    return s if len(s) <= limit else (s[:limit] + "…")
+
+
+def _trace_llm_event(*, run_id: str | None, ui_debug: bool, name: str, data: dict[str, Any]) -> None:
+    if not run_id:
+        return
+    trace_line(run_id=run_id, ui_debug=ui_debug, kind="llm", payload={"name": name, "data": data})
+
+
+def _extract_usage_metadata(msg: Any) -> dict[str, Any] | None:
+    usage = getattr(msg, "usage_metadata", None)
+    if isinstance(usage, dict):
+        return usage
+
+    response_metadata = getattr(msg, "response_metadata", None)
+    if isinstance(response_metadata, dict):
+        token_usage = response_metadata.get("token_usage")
+        if isinstance(token_usage, dict):
+            return token_usage
+        usage2 = response_metadata.get("usage")
+        if isinstance(usage2, dict):
+            return usage2
+
+    return None
+
+
+def _build_runnable_config(*, run_id: str | None, op: str, role: str) -> dict[str, Any] | None:
+    if not run_id:
+        return None
+    return {
+        "tags": ["geogebra-v2", op, f"role:{role}"],
+        "metadata": {"run_id": run_id, "role": role},
+    }
 
 
 def _strip_wrapping_quotes(raw: str) -> str:
@@ -114,6 +157,22 @@ def _load_env_file(path: Path) -> None:
         os.environ.setdefault(key, str(value))
 
 
+def _maybe_alias_langsmith_env_vars() -> None:
+    # LangChain/LangSmith commonly use LANGCHAIN_* env vars for tracing, but our docs may mention
+    # LANGSMITH_* for convenience. Support both (do not override existing LANGCHAIN_* values).
+    ls_key = (os.getenv("LANGSMITH_API_KEY") or "").strip()
+    if ls_key and not (os.getenv("LANGCHAIN_API_KEY") or "").strip():
+        os.environ.setdefault("LANGCHAIN_API_KEY", ls_key)
+
+    ls_project = (os.getenv("LANGSMITH_PROJECT") or "").strip()
+    if ls_project and not (os.getenv("LANGCHAIN_PROJECT") or "").strip():
+        os.environ.setdefault("LANGCHAIN_PROJECT", ls_project)
+
+    ls_tracing = (os.getenv("LANGSMITH_TRACING") or "").strip()
+    if ls_tracing and not (os.getenv("LANGCHAIN_TRACING_V2") or "").strip():
+        os.environ.setdefault("LANGCHAIN_TRACING_V2", ls_tracing)
+
+
 def _maybe_load_env_files() -> None:
     global _ENV_FILES_LOADED
     if _ENV_FILES_LOADED:
@@ -139,6 +198,8 @@ def _maybe_load_env_files() -> None:
     for path in candidates:
         if path.is_file():
             _load_env_file(path)
+
+    _maybe_alias_langsmith_env_vars()
 
 
 def load_llm_config_for_role(*, role: str | None) -> LlmConfig | None:
@@ -431,10 +492,13 @@ def generate_geogebra_commands(
     tool_calls_limit: int,
     tool_results: list[dict[str, Any]] | None,
     runtime_feedback: str | None,
+    run_id: str | None = None,
+    ui_debug: bool = False,
 ) -> list[str] | None:
     role = "repair" if (runtime_feedback or "").strip() else "main"
     cfg = load_llm_config(role=role)
     if cfg is None:
+        _trace_llm_event(run_id=run_id, ui_debug=ui_debug, name="command_gen.config_missing", data={"role": role})
         return None
 
     llm = _build_llm(
@@ -449,6 +513,22 @@ def generate_geogebra_commands(
     canvas_objects = _compact_canvas_objects(tool_results)
     commandbook = _load_prompt_asset("prompts/commandbook.json")
     constraints = _load_prompt_asset("prompts/geogebra-constraints.md")
+
+    _trace_llm_event(
+        run_id=run_id,
+        ui_debug=ui_debug,
+        name="command_gen.start",
+        data={
+            "role": role,
+            "model": cfg.model,
+            "base_url": cfg.base_url,
+            "remaining_tool_calls": remaining,
+            "user_text_preview": _preview_text(user_text, limit=160),
+            "has_runtime_feedback": bool((runtime_feedback or "").strip()),
+            "canvas_objects_compact_count": len(canvas_objects),
+        },
+    )
+    t0 = time.time()
 
     system = SystemMessage(
         content=(
@@ -490,8 +570,10 @@ def generate_geogebra_commands(
 
     def invoke_structured(messages: list[Any]) -> ExecGeogebraCommandsInput | None:
         try:
-            result = structured.invoke(messages)
-        except Exception:
+            result = structured.invoke(messages, config=_build_runnable_config(run_id=run_id, op="command_gen", role=role))
+        except Exception as e:
+            if run_id:
+                trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_geogebra_commands.structured_invoke", exc=e)
             return None
         if isinstance(result, ExecGeogebraCommandsInput):
             return result
@@ -499,8 +581,10 @@ def generate_geogebra_commands(
 
     def invoke_json_fallback() -> list[str] | None:
         try:
-            msg = llm.invoke([system, human])
-        except Exception:
+            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="command_gen", role=role))
+        except Exception as e:
+            if run_id:
+                trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_geogebra_commands.json_invoke", exc=e)
             return None
         content = getattr(msg, "content", None)
         if not isinstance(content, str):
@@ -522,9 +606,33 @@ def generate_geogebra_commands(
     result = invoke_structured([system, human])
     if result is not None:
         commands = _clean_commands(result.commands)
+        took_ms = int((time.time() - t0) * 1000)
+        _trace_llm_event(
+            run_id=run_id,
+            ui_debug=ui_debug,
+            name="command_gen.ok",
+            data={
+                "mode": "structured_output",
+                "took_ms": took_ms,
+                "commands_count": len(commands),
+                "commands_preview": commands[:8],
+            },
+        )
         return commands if commands else None
 
     fallback = invoke_json_fallback()
+    took_ms = int((time.time() - t0) * 1000)
+    _trace_llm_event(
+        run_id=run_id,
+        ui_debug=ui_debug,
+        name="command_gen.result",
+        data={
+            "mode": "json_fallback" if fallback else "none",
+            "took_ms": took_ms,
+            "commands_count": len(fallback) if fallback else 0,
+            "commands_preview": (fallback or [])[:8],
+        },
+    )
     return fallback if fallback else None
 
 
@@ -534,9 +642,12 @@ def generate_final_answer(
     tool_calls_used: int,
     tool_calls_limit: int,
     tool_results: list[dict[str, Any]] | None,
+    run_id: str | None = None,
+    ui_debug: bool = False,
 ) -> str | None:
     cfg = load_llm_config(role="main")
     if cfg is None:
+        _trace_llm_event(run_id=run_id, ui_debug=ui_debug, name="final.config_missing", data={"role": "main"})
         return None
 
     llm = _build_llm(
@@ -549,6 +660,23 @@ def generate_final_answer(
 
     canvas_objects = _compact_canvas_objects(tool_results)
     executed_commands = _compact_exec_commands(tool_results)
+
+    _trace_llm_event(
+        run_id=run_id,
+        ui_debug=ui_debug,
+        name="final.start",
+        data={
+            "role": "main",
+            "model": cfg.model,
+            "base_url": cfg.base_url,
+            "user_text_preview": _preview_text(user_text, limit=160),
+            "tool_calls_used": tool_calls_used,
+            "tool_calls_limit": tool_calls_limit,
+            "executed_commands_count": len(executed_commands),
+            "canvas_objects_compact_count": len(canvas_objects),
+        },
+    )
+    t0 = time.time()
 
     system = SystemMessage(
         content=(
@@ -574,17 +702,54 @@ def generate_final_answer(
     )
 
     try:
-        msg = llm.invoke([system, human])
-    except Exception:
+        msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="final", role="main"))
+    except Exception as e:
+        if run_id:
+            trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_final_answer.invoke", exc=e)
         return None
 
     content = getattr(msg, "content", None)
     if not isinstance(content, str):
+        took_ms = int((time.time() - t0) * 1000)
+        _trace_llm_event(
+            run_id=run_id,
+            ui_debug=ui_debug,
+            name="final.bad_response",
+            data={
+                "took_ms": took_ms,
+                "reason": "non_string_content",
+                "content_type": type(content).__name__,
+                "usage": _extract_usage_metadata(msg),
+            },
+        )
         return None
 
     text = content.strip()
     if not text:
+        took_ms = int((time.time() - t0) * 1000)
+        _trace_llm_event(
+            run_id=run_id,
+            ui_debug=ui_debug,
+            name="final.bad_response",
+            data={
+                "took_ms": took_ms,
+                "reason": "empty_text",
+                "usage": _extract_usage_metadata(msg),
+            },
+        )
         return None
+
+    took_ms = int((time.time() - t0) * 1000)
+    _trace_llm_event(
+        run_id=run_id,
+        ui_debug=ui_debug,
+        name="final.ok",
+        data={
+            "took_ms": took_ms,
+            "text_preview": _preview_text(text, limit=320),
+            "usage": _extract_usage_metadata(msg),
+        },
+    )
 
     return text
 

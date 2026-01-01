@@ -60,6 +60,28 @@ export V2_TRACE_ENABLED="false"
 export V2_TRACE_DIR="/absolute/path/to/logs"
 ```
 
+你在 `run-<run_id>.jsonl` 里会看到：
+- `kind="llm"`：记录每次 LLM 调用的开始/结束、耗时、返回摘要（以及是否走 fallback）
+- `kind="exception"`：记录 LLM 调用异常（例如 401/429/5xx/超时等）
+
+### LangSmith tracing（可选，推荐用于 RCA）
+
+如果你希望“看见完整的 LLM prompt/response + 调用链路”，建议接入 LangSmith：
+
+> 注意：修改 `.env.local` 后需要重启 `uvicorn` 才会生效。
+
+```bash
+# 推荐（LangChain 标准 env）
+export LANGCHAIN_TRACING_V2="true"
+export LANGCHAIN_API_KEY="..."
+export LANGCHAIN_PROJECT="geogebra-ai-drawer-v2"
+
+# 兼容写法（v2 会自动映射到 LANGCHAIN_*）
+# export LANGSMITH_TRACING="true"
+# export LANGSMITH_API_KEY="..."
+# export LANGSMITH_PROJECT="geogebra-ai-drawer-v2"
+```
+
 ### curl 自测
 ```bash
 curl -sS http://127.0.0.1:3002/healthz
