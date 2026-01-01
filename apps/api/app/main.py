@@ -265,11 +265,17 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
         interrupt_value: Optional[dict] = None
         answer_text: Optional[str] = None
         try:
+            interrupts_seen = False
             for chunk in graph.stream(input_state, config):
                 interrupts = chunk.get("__interrupt__")
-                if interrupts:
+                if interrupts and not interrupts_seen:
+                    # IMPORTANT: do not break early. Let the LangGraph stream generator
+                    # finish gracefully so GeneratorExit is not reported as an error in tracing.
                     interrupt_value = interrupts[0].value
-                    break
+                    interrupts_seen = True
+                    continue
+                if interrupts_seen:
+                    continue
 
                 node_out = chunk.get("act_node")
                 if isinstance(node_out, dict):
@@ -446,11 +452,17 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
         interrupt_value: Optional[dict] = None
         answer_text: Optional[str] = None
         try:
+            interrupts_seen = False
             for chunk in graph.stream(Command(resume=resume.model_dump()), config):
                 interrupts = chunk.get("__interrupt__")
-                if interrupts:
+                if interrupts and not interrupts_seen:
+                    # IMPORTANT: do not break early. Let the LangGraph stream generator
+                    # finish gracefully so GeneratorExit is not reported as an error in tracing.
                     interrupt_value = interrupts[0].value
-                    break
+                    interrupts_seen = True
+                    continue
+                if interrupts_seen:
+                    continue
 
                 node_out = chunk.get("act_node")
                 if isinstance(node_out, dict):
