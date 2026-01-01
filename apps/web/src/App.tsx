@@ -121,99 +121,218 @@ async function copyToClipboard(text: string): Promise<void> {
   }
 }
 
-function renderTimeline(events: RunStreamEvent[]): string[] {
-  const lines: string[] = [];
+type TraceItem =
+  | { kind: 'run'; key: string; summary: string; detail: unknown }
+  | { kind: 'thought'; key: string; summary: string; detail: unknown }
+  | {
+      kind: 'tool';
+      key: string;
+      summary: string;
+      tool_name: string;
+      tool_call_id: string;
+      input?: unknown;
+      output?: unknown;
+      ok?: boolean;
+      error?: unknown;
+    }
+  | { kind: 'verification'; key: string; summary: string; detail: unknown }
+  | { kind: 'reflection'; key: string; summary: string; detail: unknown }
+  | { kind: 'error'; key: string; summary: string; detail: unknown };
+
+function formatJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatCommandList(commands: unknown): string | null {
+  if (!Array.isArray(commands)) return null;
+  const clean = commands
+    .filter((c: unknown) => typeof c === 'string' && c.trim().length > 0)
+    .map((c: string) => c.trim());
+  if (!clean.length) return null;
+  const limit = 120;
+  const shown = clean.slice(0, limit);
+  const lines = shown.map((c, idx) => `${idx + 1}. ${c}`);
+  if (clean.length > shown.length) lines.push(`… (+${clean.length - shown.length} more)`);
+  return lines.join('\n');
+}
+
+function buildTraceItems(events: RunStreamEvent[]): TraceItem[] {
+  const items: TraceItem[] = [];
+  const toolIndexById = new Map<string, number>();
+
   for (const ev of events) {
+    if (ev.event === 'budget' || ev.event === 'plan_update' || ev.event === 'node_start' || ev.event === 'node_end') {
+      continue;
+    }
+    if (ev.event === 'interrupt' || ev.event === 'run_end' || ev.event === 'final') {
+      continue;
+    }
+
     if (ev.event === 'run_start') {
       const pv = ev.data.protocol_version;
       const llmEnabled = ev.data.llm_enabled;
       const llmModel = ev.data.llm_model ?? undefined;
       const llmText =
-        llmEnabled === false ? ' llm=disabled' : typeof llmModel === 'string' && llmModel ? ` llm=${llmModel}` : '';
-      lines.push(`run_start${pv ? ` protocol=${pv}` : ''}${llmText} run_id=${shortId(ev.data.run_id)} (${ev.data.run_id})`);
+        llmEnabled === false ? 'llm=disabled' : typeof llmModel === 'string' && llmModel ? `llm=${llmModel}` : '';
+      const parts = [`开始`, pv ? `protocol=${pv}` : null, llmText || null, `run_id=${shortId(ev.data.run_id)}`].filter(Boolean);
+      items.push({ kind: 'run', key: `run_start:${ev.data.run_id}`, summary: parts.join(' · '), detail: ev.data });
       continue;
     }
-    if (ev.event === 'budget') {
-      const parts: string[] = [];
-      if (typeof ev.data.tool_calls_used === 'number' && typeof ev.data.tool_calls_limit === 'number') {
-        parts.push(`tool_calls=${ev.data.tool_calls_used}/${ev.data.tool_calls_limit}`);
-      }
-      if (typeof ev.data.model_calls_used === 'number' && typeof ev.data.model_calls_limit === 'number') {
-        parts.push(`model_calls=${ev.data.model_calls_used}/${ev.data.model_calls_limit}`);
-      }
-      if (parts.length) lines.push(`budget ${parts.join(' ')}`);
+
+    if (ev.event === 'token') {
+      items.push({
+        kind: 'thought',
+        key: `token:${items.length}`,
+        summary: `思考 · ${ev.data.text_delta}`,
+        detail: ev.data,
+      });
       continue;
     }
-    if (ev.event === 'node_start') {
-      lines.push(`node_start ${ev.data.name}`);
-      continue;
-    }
-    if (ev.event === 'plan_update') {
-      const plan = ev.data.plan;
-      const done = plan.filter((p) => p.done).length;
-      lines.push(`plan ${done}/${plan.length}`);
-      continue;
-    }
+
     if (ev.event === 'tool_start') {
       const inputText = summarizeToolInput(ev.data.tool_name, ev.data.input);
-      lines.push(
-        `tool_use ${ev.data.tool_name}#${shortId(ev.data.tool_call_id)}${inputText ? ` (${inputText})` : ''}`,
-      );
-      if (ev.data.tool_name === 'exec_geogebra_commands') {
-        const input = ev.data.input as any;
-        const commands: unknown = input?.commands;
-        if (Array.isArray(commands)) {
-          const clean = commands.filter((c: unknown) => typeof c === 'string' && c.trim().length > 0);
-          const show = clean.slice(0, 8);
-          for (let i = 0; i < show.length; i += 1) {
-            lines.push(`  ${i + 1}. ${show[i]}`);
-          }
-          if (clean.length > show.length) {
-            lines.push(`  … (+${clean.length - show.length} more)`);
-          }
+      const summary = `工具 · ${ev.data.tool_name}#${shortId(ev.data.tool_call_id)}${inputText ? ` · ${inputText}` : ''}`;
+      const idx = items.length;
+      toolIndexById.set(ev.data.tool_call_id, idx);
+      items.push({
+        kind: 'tool',
+        key: `tool:${ev.data.tool_call_id}`,
+        summary,
+        tool_name: ev.data.tool_name,
+        tool_call_id: ev.data.tool_call_id,
+        input: ev.data.input,
+      });
+      continue;
+    }
+
+    if (ev.event === 'tool_end') {
+      const idx = toolIndexById.get(ev.data.tool_call_id);
+      const tail = ev.data.ok ? summarizeToolOutput(ev.data.tool_name, ev.data.output) : 'error';
+      const summary = `工具 · ${ev.data.tool_name}#${shortId(ev.data.tool_call_id)} · ok=${ev.data.ok}${tail ? ` · ${tail}` : ''}`;
+      if (idx == null) {
+        items.push({
+          kind: 'tool',
+          key: `tool_end:${ev.data.tool_call_id}`,
+          summary,
+          tool_name: ev.data.tool_name,
+          tool_call_id: ev.data.tool_call_id,
+          output: ev.data.output,
+          ok: ev.data.ok,
+          error: ev.data.error,
+        });
+      } else {
+        const prev = items[idx];
+        if (prev.kind === 'tool') {
+          prev.summary = summary;
+          prev.output = ev.data.output;
+          prev.ok = ev.data.ok;
+          prev.error = ev.data.error;
         }
       }
       continue;
     }
-    if (ev.event === 'interrupt') {
-      lines.push(`interrupt ${ev.data.tool_name}#${shortId(ev.data.tool_call_id)}`);
+
+    if (ev.event === 'verification') {
+      items.push({
+        kind: 'verification',
+        key: `verification:${items.length}`,
+        summary: `验证 · ${ev.data.label} · ok=${ev.data.ok}`,
+        detail: ev.data,
+      });
       continue;
     }
-    if (ev.event === 'tool_end') {
-      const tail = ev.data.ok ? summarizeToolOutput(ev.data.tool_name, ev.data.output) : 'error';
-      lines.push(`tool_result ${ev.data.tool_name}#${shortId(ev.data.tool_call_id)} ok=${ev.data.ok}${tail ? ` (${tail})` : ''}`);
+
+    if (ev.event === 'reflection') {
+      const preview = ev.data.summary.length > 60 ? `${ev.data.summary.slice(0, 60)}…` : ev.data.summary;
+      items.push({
+        kind: 'reflection',
+        key: `reflection:${items.length}`,
+        summary: `反思 · ${preview}`,
+        detail: ev.data,
+      });
       continue;
     }
+
     if (ev.event === 'client_error') {
       const prefix =
         ev.data.status === 0
-          ? `client_error at=${ev.data.at}`
-          : `client_error at=${ev.data.at} HTTP ${ev.data.status} ${ev.data.statusText}`;
-
-      const detail = ev.data.detail;
-      const expected = typeof detail === 'object' && detail !== null ? (detail as any).expected : null;
-      const got = typeof detail === 'object' && detail !== null ? (detail as any).got : null;
-      if (expected?.tool_call_id && expected?.tool_name && got?.tool_call_id && got?.tool_name) {
-        lines.push(
-          `${prefix} (expected ${expected.tool_name}#${shortId(expected.tool_call_id)} got ${got.tool_name}#${shortId(got.tool_call_id)})`,
-        );
-      } else if (typeof detail === 'string' && detail) {
-        lines.push(`${prefix} (${detail})`);
-      } else {
-        lines.push(prefix);
-      }
-      continue;
-    }
-    if (ev.event === 'final') {
-      lines.push('final');
-      continue;
-    }
-    if (ev.event === 'run_end') {
-      lines.push('run_end');
+          ? `错误 · at=${ev.data.at}`
+          : `错误 · at=${ev.data.at} · HTTP ${ev.data.status} ${ev.data.statusText}`;
+      items.push({ kind: 'error', key: `client_error:${items.length}`, summary: prefix, detail: ev.data });
       continue;
     }
   }
-  return lines;
+
+  return items;
+}
+
+function TraceList({ events }: { events: RunStreamEvent[] }) {
+  const items = useMemo(() => buildTraceItems(events), [events]);
+  if (!items.length) return null;
+
+  return (
+    <div className="traceList">
+      {items.map((item) => {
+        const open = item.kind === 'error' ? true : undefined;
+        return (
+          <details key={item.key} className={`traceItem traceItem-${item.kind}`} open={open}>
+            <summary className="traceSummary">{item.summary}</summary>
+            <div className="traceDetail">
+              {item.kind === 'tool' ? (
+                <div className="traceKV">
+                  <div>
+                    <span className="traceKey">tool_call_id</span> <code>{item.tool_call_id}</code>
+                  </div>
+                  {item.input !== undefined ? (
+                    <>
+                      <div className="traceKey">input</div>
+                      <pre className="tracePre">{formatJson(item.input)}</pre>
+                      {item.tool_name === 'exec_geogebra_commands' ? (
+                        (() => {
+                          const commands = (item.input as any)?.commands;
+                          const formatted = formatCommandList(commands);
+                          return formatted ? (
+                            <>
+                              <div className="traceKey">commands</div>
+                              <pre className="tracePre">{formatted}</pre>
+                            </>
+                          ) : null;
+                        })()
+                      ) : null}
+                    </>
+                  ) : null}
+
+                  {item.ok !== undefined ? (
+                    <div>
+                      <span className="traceKey">ok</span> <code>{String(item.ok)}</code>
+                    </div>
+                  ) : null}
+                  {item.error !== undefined ? (
+                    <>
+                      <div className="traceKey">error</div>
+                      <pre className="tracePre">{formatJson(item.error)}</pre>
+                    </>
+                  ) : null}
+                  {item.output !== undefined ? (
+                    <>
+                      <div className="traceKey">output</div>
+                      <pre className="tracePre">{formatJson(item.output)}</pre>
+                    </>
+                  ) : null}
+                </div>
+              ) : (
+                <pre className="tracePre">{formatJson(item.detail)}</pre>
+              )}
+            </div>
+          </details>
+        );
+      })}
+    </div>
+  );
 }
 
 async function createThreadId(): Promise<string> {
@@ -321,9 +440,6 @@ export default function App() {
           prev.map((m) => {
             if (m.id !== assistantId || m.role !== 'assistant') return m;
             const nextEvents = [...m.events, ev];
-            if (ev.event === 'token') {
-              return { ...m, events: nextEvents, text: m.text + ev.data.text_delta };
-            }
             if (ev.event === 'final') {
               return { ...m, events: nextEvents, text: ev.data.answer.explanation };
             }
@@ -521,8 +637,6 @@ export default function App() {
                 }
                 return (
                   <div key={m.id} className="bubble assistant">
-                    {m.text || (m.status === 'running' ? 'thinking…' : '')}
-                    {m.status === 'error' ? `\n\nERROR: ${m.error}` : null}
                     {m.events.length ? (
                       <div className="meta" style={{ marginTop: 8 }}>
                         {(() => {
@@ -565,12 +679,11 @@ export default function App() {
                         })()}
                       </div>
                     ) : null}
-                    {m.events.length ? (
-                      <div className="timeline">
-                        <div className="timelineHeader">Timeline</div>
-                        <pre className="timelinePre">{renderTimeline(m.events).join('\n')}</pre>
-                      </div>
-                    ) : null}
+                    {m.events.length ? <TraceList events={m.events} /> : null}
+                    <div className="assistantAnswer">
+                      {m.text || (m.status === 'running' ? 'thinking…' : '')}
+                      {m.status === 'error' ? `\n\nERROR: ${m.error}` : null}
+                    </div>
                     <details>
                       <summary>Debug events ({m.events.length})</summary>
                       <pre>{JSON.stringify(m.events, null, 2)}</pre>
