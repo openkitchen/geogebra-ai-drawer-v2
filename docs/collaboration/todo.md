@@ -7,23 +7,41 @@
 
 | ID  | Title | Owner | Status | DependsOn | LastUpdated | Notes |
 | --- | ----- | ----- | ------ | --------- | ----------- | ----- |
-| 001 | 建立 commandbook（常用命令签名+示例） | codex-A | backlog | - | 2025-12-25 | 初始条目包含 Text/Polygon/SetColor/Angle/Circle |
-| 002 | 记录执行错误并自动注入 commandbook | codex-B | review | 001 | 2025-12-28 | 已落地 server hook：errorContext(tool)→token→commandbook hints（限量 0-3 条）注入 system prompt；等待 001 命令库条目完善后再验收 |
-| 003 | 扩充自测用例（签名纠正/降级路径） | codex-A | backlog | 001 | 2025-12-25 | 在 docs/self-test.md 增补 3-5 条场景 |
-| 004 | 决策：色值 0..1 vs 0..255 归一策略 | wei | backlog | - | 2025-12-25 | 记录到 decision-log.md，统一前后端参数约定 |
-| 005 | Reflection: 轴/网格命令失败 & 提示修正 | codex-B | in-progress | - | 2025-12-26 | 落盘错误日志 + 修正 SetAxesVisible/SetGridVisible 提示，补自测 |
-| 006 | 工具链稳定化（get_canvas_state 仍报 result is not defined） | codex-B | done | - | 2025-12-27 | 修复 /api/chat 成功路径 ReferenceError；服务端统一返回 toolCalls；DebugPanel 增加 toolCalls 展示；build + browser self-test 通过 |
-| 007 | CanvasState on-demand（默认不发 state） | codex-B | done | - | 2025-12-28 | 客户端不主动发送 `canvasState`；引用/修改现有图时通过 `get_canvas_state()` 的 tool runner 按需获取（服务端 `tool_request` 兜底）。 |
-| 008 | 工具/命令边界兜底（禁止 tool 混进 commands） | codex-B | done | 007 | 2025-12-28 | 服务端对 `commands` 做安全/一致性校验：剔除 `get_canvas_state()` 等 tool 伪命令；统一走 `tool_request`/`TOOL_RESULT` 闭环，避免旧 token/直传 state。 |
-| 009 | 去掉 GLOBAL_CANVAS_STATE（per-request context） | codex-B | done | 007,014 | 2025-12-28 | 已移除服务端全局可变画布 state，避免未来并发/多 tab 串线风险。 |
-| 010 | 聊天窗口：解释保留换行 + 命令可折叠/复制 + 多行输入 | codex-A | done | - | 2025-12-26 | implemented in components/ChatInterface.tsx; self-test updated |
-| 011 | 聊天窗口可观测性：显示 tool 使用/重试记录（默认折叠） | codex-B | done | 006 | 2025-12-27 | 在对话中追加“运行记录”折叠块：展示 toolCalls / fallback / retry / rollback 等摘要与详情（自测通过） |
-| 012 | 聊天窗口：pending 时显示 thinking... | codex-B | done | - | 2025-12-27 | 发送后未返回时，在对话区显示一条临时 assistant bubble：thinking...（自测通过） |
-| 013 | 新增工具：set_corner_text（画布四角固定提示文字） | codex-B | done | 011 | 2025-12-27 | 服务端新增 tool + 协议字段；前端渲染 overlay；模型可调用 tool 更新角落提示（自测通过） |
-| 014 | 通用工具调用（前端执行 tool runner，多轮 HTTP） | codex-B | done | 007,008 | 2025-12-28 | 主链路已收敛为 kind=tool_request → TOOL_RESULT → kind=final；并已移除旧 token/直传 state 与 /api/ggb。 |
-| 015 | 协议收敛：/api/chat 版本化响应（kind/tool_request/tool_result） | codex-B | backlog | 014 | 2025-12-28 | 014/016 已收敛完成，下一步优先做协议版本化与共享类型 + zod 输出校验，避免前后端/文档漂移；为后续模块化重构提供回归面 |
-| 016 | 下线 /api/ggb，统一走 /api/chat | codex-B | done | 014 | 2025-12-28 | 已删除 `/api/ggb` 旧路由，统一走 `/api/chat`（kind=final/tool_request）。 |
-| 017 | 服务端模块化拆分（index.mjs 拆分 router/llm/prompt/cache/tools） | codex-B | backlog | 015 | 2025-12-28 | 016 已完成，剩余依赖为 015；降低 god-file 风险；小步迁移，确保 build+自测通过 |
-| 018 | 前端模块化拆分（App.tsx 拆分 chatRunner/toolRunner/ggbExecutor） | codex-B | backlog | 015 | 2025-12-28 | 依赖不变；降低 App.tsx 复杂度，减少回归概率；保持行为不变为第一原则 |
-| 019 | 统一 overlay 路径（overlayText vs set_corner_text） | codex-B | backlog | 015 | 2025-12-28 | 依赖不变；明确主路径与降级路径，减少模型行为不确定性与文档困惑 |
-| 020 | 新增 Codex skill：refactor-arch（并纳入 docs 索引） | codex-B | done | - | 2025-12-28 | 仓库内：`skills/refactor-arch/SKILL.md`；安装说明见 `docs/spec/agent-skills.md` |
+| 100 | v2：创建独立 worktree 目录（隔离 v1/v2） | codex-A | done | - | 2025-12-31 | v2 worktree：`/Users/wei/workspaces/openkitchen/geogebra-ai-drawer-v2`；并更新 v2 `AGENTS.md` 与 decision-log |
+| 101 | v2：Python API 脚手架（FastAPI + SSE echo） | codex-A | done | 100 | 2025-12-31 | 新增 `apps/api`：`POST /api/threads`、`POST /api/threads/{thread_id}/runs/stream`、`GET /healthz`；SSE 输出 `run_start/plan_update/token/final` |
+| 102 | v2：补齐文档索引与自测（API smoke test） | codex-A | done | 101 | 2025-12-31 | 已更新 `docs/README.md` 索引；在 `docs/self-test.md` 增加 v2 API 的 curl 自测步骤（thread/run SSE） |
+| 103 | v2：Web UI 迁移到 `apps/web` 并消费 SSE | codex-A | done | 101 | 2025-12-31 | 已完成：最小 UI + SSE 解析；对话气泡持久化 `RunStreamEvent`；支持 interrupt→/resume 多轮继续 |
+| 104 | v2：LangGraph durable state（checkpointer + interrupts/resume） | codex-A | done | 101 | 2025-12-31 | 已接入 LangGraph `interrupt()` + `Command(resume=...)`；已提供 `GET /state` 与 `GET /state/history`；POC 先用 InMemorySaver |
+| 105 | v2（codex-B）：Web 嵌入 GeoGebra 画板（最小可用） | codex-B | done | 103 | 2025-12-31 | `apps/web` 嵌入 Classic（deployggb.js）+ ready 状态；build 通过 |
+| 106 | v2（codex-B）：前端工具实现（get_canvas_state / eval_expression / exec_geogebra_commands） | codex-B | done | 105,104 | 2025-12-31 | interrupt(kind=frontend_tool)→前端执行→/resume 回填真实结果；build 通过 |
+| 107 | v2（codex-A）：/resume 严格校验与一致性契约（tool_call_id/shape） | codex-A | done | 104 | 2025-12-31 | tool_call_id/tool_name mismatch 返回 409；duplicate resume 兜底；自测文档同步 |
+| 108 | v2（codex-A）：多步 action loop（支持多次 interrupt） | codex-A | done | 107 | 2025-12-31 | 支持连续多次 frontend_tool；budget 事件可见 |
+| 109 | v2（codex-B）：UI 过程展示（更像 codex-cli） | codex-B | done | 103,106 | 2025-12-31 | Timeline（budget/node/plan/tool_use/tool_result/final/run_end）+ Debug events 折叠；build 通过 |
+| 110 | v2（codex-A）：补齐 v2 工具/事件契约文档（可直接对照实现） | codex-A | done | 107 | 2025-12-31 | 更新 `docs/spec/langgraph-orchestration.md` + `docs/self-test.md` |
+| 111 | v2（codex-A）：demo draw（exec_geogebra_commands）+ 结果摘要 | codex-A | done | 106 | 2025-12-31 | 最小 demo：get_canvas_state→exec→get_canvas_state→final |
+| 112 | v2（codex-B）：前端工具幂等 + /resume 409 诊断 | codex-B | done | 106,111 | 2025-12-31 | tool_call_id 缓存防重复执行；/resume 非 2xx 写 client_error 事件；build 通过 |
+| 113 | v2（codex-A）：协议/类型收敛（Pydantic schema + protocol_version + schema endpoint） | codex-A | done | 112 | 2025-12-31 | `apps/api/app/protocol_v2.py` + `GET /api/schema/v2`；run_start.data 带 protocol_version |
+| 114 | v2（codex-B）：Web UX 小步增强（New thread / Clear chat / Clear canvas / 多行输入 / 自动滚动） | codex-B | done | 103 | 2025-12-31 | build 通过 |
+| 115 | v2（codex-B）：Schema viewer + protocol_version 展示（对齐 113） | codex-B | done | 113 | 2025-12-31 | UI 增加 schema 面板；labels string→string[]；build 通过 |
+| 116 | v2（codex-A）：后端接入真实 LLM（最小可用，stub fallback） | codex-A | done | 113 | 2026-01-01 | `.env(.local)` 驱动模型（aliases+roles）；修复 python-dotenv 默认插值导致 `${VECTORENGINE_API_KEY}` 变空；command-gen 注入 `prompts/commandbook.json` + `prompts/geogebra-constraints.md`；支持按 role 调用（main/repair） |
+| 117 | v2（codex-B）：Canvas Inspector（只读，对照 schema） | codex-B | done | 115 | 2025-12-31 | UI 增加 Canvas Inspector（get_canvas_state 展示 objects） |
+| 118 | v2（codex-B）：e2e smoke script（SSE 自动 interrupt→resume） | codex-B | done | 116 | 2026-01-01 | `scripts/v2_smoke_test.py` 支持模拟工具并可 `--force-repair-once` 覆盖 repair loop；支持 `--turn` 多轮（同 thread） |
+| 119 | v2（codex-B）：UI budget + LLM meta 展示增强 | codex-B | done | 116 | 2025-12-31 | Timeline 展示 tool/model budget；meta 展示 llm_enabled/llm_model |
+| 120 | v2（codex-A）：后端支持 Gemini 原生 API（provider=google / v1beta） | codex-A | backlog | 116 | 2025-12-31 | 目前先用 VectorEngine OpenAI-compatible 调 `gemini-*`；该任务用于补齐原生 Google API 的行为差异与稳定性 |
+| 121 | v2（codex-A）：多轮问题排障 trace（后端写入 logs + UI 一键复制 run_id） | codex-A | done | 116 | 2025-12-31 | 后端写 `logs/v2/run-<run_id>.jsonl`；UI 可 copy run_id/thread_id/debug JSON/draw commands |
+| 122 | P0 v2：执行层“无残留”闭环（dialog 捕获 + 差集回滚 + 高信号反馈结构） | codex-A | done | 106,104 | 2025-12-31 | exec 增加 dialogs + created/deleted 差集 + 硬失败自动回滚；新增 delete_objects 工具供语义失败 deterministic 回滚；`npm --prefix apps/web run build` ✅ |
+| 123 | P0 v2：verify + repair loop（硬失败 + 语义失败） | codex-A | done | 122 | 2026-01-01 | verify 覆盖退化 + 关键对象缺失 +（新增）内接/直角三角形的坐标语义校验；语义失败直接 `delete_objects` 回滚再重试；tool_calls_limit=12；预算耗尽时绘图场景 final 保持 deterministic；`python scripts/v2_smoke_test.py --force-repair-once` ✅ |
+| 124 | P0 v2：画布卫生/可读性兜底（几何 preset + 标签/角度展示 + 质量校验） | codex-A | done | 105,106 | 2025-12-31 | geometry preset 隐藏轴/网格；showKeyLabels；hideAngleValueLabels；validateDiagram 告警通过 tool output 回传 |
+| 125 | P0 v2：工具 roster 单一事实源 + 对齐校验（schema/前端/后端/文档） | codex-A | done | 113 | 2025-12-31 | schema 增补 delete_objects 与 exec 输出字段；同步 `docs/spec/langgraph-orchestration.md`、`docs/self-test.md` |
+| 126 | P1 v2：prompt/playbook 资产化（packs/scenarios/constraints/commandbook 注入） | codex-A | backlog | 123 | 2025-12-31 | 已做最小注入（commandbook/constraints→command-gen）；待补：packs/scenarios 选择机制与覆盖 MVP 题型 |
+| 127 | P1 v2：多轮记忆/偏好（history + summarization 策略） | codex-A | backlog | 123 | 2025-12-31 | 让 v2 通过可控的 history/摘要保持上下文与偏好（B1/B2）；限制状态体积 |
+| 128 | P1 v2：编辑意图与安全边界（删/改/重画/复用对象策略） | codex-A | backlog | 127 | 2025-12-31 | 明确 edit intent + 安全动作边界（Child-first） |
+| 134 | P1 v2：Plan 可见（模型 plan → plan_update 事件） | codex-A | backlog | 123 | 2025-12-31 | 在 graph 增加 plan_node：模型产出结构化 todo 写入 state；SSE 发 plan_update（真实内容） |
+| 135 | v2：文档/入口收敛（标记 v1 legacy） | codex-A | done | - | 2026-01-01 | root `README.md` 增加 v2 Quickstart；root `package.json` 增加 `npm run dev:v2`；v2 Web 默认端口 3000（见 `apps/web/vite.config.ts` 与 `docs/self-test.md`） |
+| 136 | v2：协议类型单一事实源（/api/schema/v2 → TS） | codex-B | backlog | 125 | 2025-12-31 | 以 `GET /api/schema/v2` 为事实源生成/校验 TS types（替代手写 `RunStreamEvent`）；加 CI/脚本防漂移 |
+| 137 | v2：工具注册表收敛（supported_tools + 严格校验） | codex-A | backlog | 125 | 2025-12-31 | server 输出 supported_tools；UI 收到未知 tool fail-fast；明确 `eval_expression` 的正式定位 |
+| 138 | v2：API 模块化（RunManager / SSE emitter） | codex-A | backlog | 125 | 2025-12-31 | 拆分 `apps/api/app/main.py`：store/事件序列/handlers 解耦，减少全局状态散落 |
+| 139 | v2：Web run loop 拆分（hook + timeline renderer） | codex-B | backlog | 136 | 2025-12-31 | 拆分 `apps/web/src/App.tsx`：SSE consume、interrupt loop、timeline 渲染解耦 |
+| 140 | v2：状态/预算计数单一来源（避免 RunState/GraphState 双写） | codex-A | backlog | 138 | 2025-12-31 | 明确 source-of-truth（优先 GraphState）；API 层只读 snapshot 映射 budget/plan |
+| 141 | v2：持久化 checkpointer 方案评审（PostgresSaver） | wei | backlog | 104 | 2025-12-31 | 输出迁移设计（配置、回放/恢复、自测、成本）并待拍板 |
+| 142 | P1 v2：数值测量工具（measure_expression / eval_numeric） | codex-A | backlog | 125 | 2025-12-31 | 为语义验证（角度/距离/约束）补齐“可读数值”的 tool（避免只靠 valueString/启发式） |

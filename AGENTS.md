@@ -1,6 +1,13 @@
-# Repository Guidelines
+# Repository Guidelines (Worktree v2)
+
+> 决策记录：本目录是 **v2 独立 worktree**（LangGraph/LangChain Python 重构，允许破坏兼容）。  
+> v1 目录保留在：`/Users/wei/workspaces/openkitchen/geogebra-ai-drawer`。  
+> 协作约定：请默认只在本目录推进 v2；涉及跨版本共用的决策/规范，写入 `docs/collaboration/decision-log.md` 并在 `docs/collaboration/todo.md` 跟踪。
 
 > 并行开发指南：协作规则与最小必读清单，保持 300 字内便于快速上手。
+
+## Working agreements
+- 回复使用中文；代码/注释使用英文；文档按项目要求（见 `docs/`）。
 
 ## Onboarding（先读这些）
 - `docs/design/overview.md`、`docs/design/decisions.md`：产品目标、LLM 优先取舍、不能由前端硬编码替代的边界。
@@ -14,10 +21,11 @@
 3) **文档同步**：涉及路由、修复闭环、输出格式、画布预设、提示体系的改动，必须同步更新对应 spec/decisions，并在 PR 中注明章节。
 
 ## 项目结构
-- Client：`App.tsx`、`components/`；共享类型 `types.ts`；入口 `index.html`。
-- Server：`server/index.mjs`（Express，加载 `prompts/` packs/constraints/scenarios）。
-- Config：`scripts/`（setup/doctor）、`vite.config.ts`、`tsconfig.json`；生成物 `dist/`。
-- Prompts & Docs：`prompts/` 为系统提示；规范与协作文件位于 `docs/`、`docs/collaboration/`。
+- v2 目标结构（允许调整，但需在 PR/决策日志里同步）：
+  - Web UI（React/Vite）：`apps/web/`
+  - API（Python/FastAPI + LangGraph）：`apps/api/`
+  - Docs：`docs/`（v2 spec 以 `docs/spec/langgraph-orchestration.md` 为主；v1 相关文档标记为 legacy 或迁移）
+  - Collaboration：`docs/collaboration/`（todo/decision-log/inbox/self-test）
 
 ## 工具优先（画布感知）
 - LLM 不直接“猜”画布：获取/测量画布状态应通过工具调用，当前已有 `get_canvas_state`（后端 ai-sdk tool）。
@@ -35,9 +43,10 @@
 - 协作手册：详见 `docs/collaboration/parallel-dev.md`（含冲突解决、分支命名、手动合并顺序）。
 
 ## 构建与测试
-- `npm run setup`（首次），`npm run doctor`（检查 env），`npm run dev`（前后端联调 3000/3002）。
-- `npm run build` → `dist/`；`npm run preview` 本地预览；`npm start` 生产模式。
-- 暂无自动化测试；新增功能优先补 Vitest/Cypress，文件后缀 `.test.ts(x)`/`.spec.ts(x)`；至少确保 `npm run build` 通过。
+- v2（规划）：
+  - Web：`npm run dev` / `npm run build`（具体命令以 `apps/web/package.json` 为准）
+  - API：`uv run uvicorn ...`（具体命令以 `apps/api/pyproject.toml` 为准）
+  - 自测优先：每次改动后更新并勾选 `docs/self-test.md`
 
 ## 编码规范
 - TypeScript + React，ESM，2 空格缩进；组件/文件 PascalCase，函数/变量 camelCase，环境变量 UPPER_SNAKE_CASE。

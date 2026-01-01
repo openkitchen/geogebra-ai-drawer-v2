@@ -6,6 +6,161 @@
 - **错误自愈**（能看见 GeoGebra 反馈并修复重试）
 - **教学表达**（适合小朋友：短句、分步、清晰）
 
+---
+
+## v2（Python API）Smoke Test（thread/run + SSE）
+
+目标：先验证 v2 的 **thread/run + SSE** 基线端点可跑通（默认 stub；可选开启真实 LLM）。
+
+### 启动（本地）
+
+也可以直接用快捷脚本（推荐）：
+```bash
+# web + api
+./scripts/v2_dev.sh
+
+# 只起 api（默认 3002，可用 API_PORT 覆盖）
+./scripts/v2_api_dev.sh
+```
+
+```bash
+cd apps/api
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e .
+# 可选：开启真实 LLM（当前 v2 仅支持 openai/openai-compatible）
+# 推荐：复用 v1 `.env.local` 的 LLM_MODEL_ALIASES_JSON + LLM_ROLE_BINDINGS_JSON
+# export V2_LLM_ROLE="main"          # 或 gemini_fast / gemini_think（OpenAI-compatible）
+# （注意：若 role 指向 provider=google，目前会退回 stub，待 todo 120 补齐原生 Gemini）
+# 或：显式配置 OpenAI / OpenAI-compatible
+# export V2_LLM_API_KEY="..."
+# export V2_LLM_MODEL="gpt-5.2-chat-latest"
+# export V2_LLM_BASE_URL="https://api.vectorengine.ai/v1"  # 可选
+# 或：复用 v1 的 LLM_ENDPOINTS_JSON（仅 openai/openai-compatible）
+# 或：复用 v1 的 `.env.local`（默认会尝试读取本 worktree 的 `.env.local`，以及 sibling v1 `../geogebra-ai-drawer/.env.local`）
+# export V2_ENV_FILE="/absolute/path/to/.env.local"  # 可显式指定
+uvicorn app.main:app --port 3002
+```
+
+### Debug trace（可选，排查“第二轮不对劲/断流/409”）
+
+当 `ui_context.debug=true` 时，后端会把每次 run 的关键过程写到本地日志文件，便于你把 run 的全过程发我定位：
+
+- 目录：`logs/v2/`
+- 文件：`logs/v2/run-<run_id>.jsonl`
+- `run_id` 可从 UI 的 `Timeline -> run_start` 里直接复制（现在会展示完整 run_id）
+
+可选环境变量：
+```bash
+# 关闭 trace（默认：ui_debug=true 时开启）
+export V2_TRACE_ENABLED="false"
+
+# 指定 trace 输出目录（默认：repo/logs/v2）
+export V2_TRACE_DIR="/absolute/path/to/logs"
+```
+
+### curl 自测
+```bash
+curl -sS http://127.0.0.1:3002/healthz
+curl -sS http://127.0.0.1:3002/api/schema/v2 | jq .protocol_version
+THREAD_ID=$(curl -sS -X POST http://127.0.0.1:3002/api/threads | jq -r .thread_id)
+curl -sS "http://127.0.0.1:3002/api/threads/${THREAD_ID}/state" | jq .
+curl -sS "http://127.0.0.1:3002/api/threads/${THREAD_ID}/state/history?limit=5" | jq .
+curl -sS -N -H 'Content-Type: application/json' \
+  -X POST "http://127.0.0.1:3002/api/threads/${THREAD_ID}/runs/stream" \
+  -d '{"input":{"user_text":"hi"},"ui_context":{"debug":true,"plan_mode":false}}'
+```
+
+### 脚本自测（可选，免手动复制 tool_call_id）
+```bash
+# 先启动后端（另一个终端）
+uvicorn app.main:app --port 3002
+
+# 再运行 smoke test（脚本会模拟 frontend tools 回填）
+python3 scripts/v2_smoke_test.py --base-url http://127.0.0.1:3002 --user-text "画一个圆"
+
+# （可选）强制制造一次“画布诊断失败”，验证 verify→rollback→repair loop（会触发更多次 interrupt/resume）
+python3 scripts/v2_smoke_test.py --base-url http://127.0.0.1:3002 --user-text "画一个圆" --force-repair-once
+```
+
+继续（拿到上一步 `run_start` 里的 `run_id` 后）：
+```bash
+RUN_ID="<copy_from_run_start>"
+curl -sS -N -H 'Content-Type: application/json' \
+  -X POST "http://127.0.0.1:3002/api/threads/${THREAD_ID}/runs/${RUN_ID}/resume" \
+  -d '{
+    "command": {
+      "resume": {
+        "tool_name": "<copy_from_interrupt.tool_name>",
+        "tool_call_id": "<copy_from_interrupt.tool_call_id>",
+        "ok": true,
+        "output": { "stub": true }
+      }
+    }
+  }'
+```
+
+如果上一步 `/resume` 又返回了新的 `interrupt`（多步工具请求），继续复制新的 `tool_name/tool_call_id` 再 `/resume` 一次即可：
+```bash
+curl -sS -N -H 'Content-Type: application/json' \
+  -X POST "http://127.0.0.1:3002/api/threads/${THREAD_ID}/runs/${RUN_ID}/resume" \
+  -d '{
+    "command": {
+      "resume": {
+        "tool_name": "<copy_from_interrupt_2.tool_name>",
+        "tool_call_id": "<copy_from_interrupt_2.tool_call_id>",
+        "ok": true,
+        "output": { "stub": true }
+      }
+    }
+  }'
+```
+
+（可选）触发多步 demo：把 `user_text` 改成包含 “画/绘制/draw” 的内容（例如 “画一个圆”），预期会看到：
+- 第 1 次 `interrupt`: `get_canvas_state`
+- 第 2 次 `interrupt`: `exec_geogebra_commands`
+- 第 3 次 `interrupt`: `get_canvas_state`
+最后才输出 `final` → `run_end`
+
+（可选）校验服务端严格一致性：故意传错 `tool_call_id`，应返回 HTTP 409（JSON detail 含 expected/got）。
+
+期望：
+- `runs/stream` 能看到 SSE 的 `event:` 序列（至少 `run_start` → `budget` → `plan_update` → `token` → `tool_start` → `interrupt`），且**不会**在此处输出 `run_end`（run 被挂起等待 `/resume`）
+- `thread_id/run_id` 均为 UUID 字符串（可从 `run_start` 里拿到 `run_id`）
+- `run_start.data` 里包含 `protocol_version`（用于排障；UI 可忽略）
+- `run_start.data` 里包含 `llm_enabled`（true/false），并可选包含 `llm_model/llm_base_url`（仅用于排障；UI 可忽略）
+- `budget` 至少包含 `tool_calls_used/tool_calls_limit`，若开启真实 LLM 还应包含 `model_calls_used/model_calls_limit`
+- `resume` 可能需要多次（直到不再出现 `interrupt`）；每次 `resume` 至少包含 `tool_end`，并伴随 `budget`；最终一次会输出 `final` → `run_end`
+- `state` 返回里包含 `graph.values/graph.next/graph.checkpoint_id`（用于 debug/time-travel）
+- `state/history` 返回里包含最近的 checkpoints（用于回放与 RCA）
+
+### （可选）脚本自测（自动跟随 interrupt→resume）
+
+前置：服务已按上文启动在 `127.0.0.1:3002`。
+
+```bash
+python scripts/v2_smoke_test.py --base-url http://127.0.0.1:3002 --user-text "画一个圆"
+```
+
+期望：命令输出包含 `interrupt`/`resume` 多轮流程，并以 `OK: completed after ... resume(s).` 结束。
+
+### UI 自测（SSE 过程不会消失）
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+
+浏览器打开 `http://127.0.0.1:3000/`：
+- 期望：页面左侧显示 GeoGebra Classic 画板，状态显示 `ggbApplet: ready`；可用工具栏手动创建点/线
+- 发送一条消息（例如 “hi from ui”）
+- 期望：assistant bubble 显示最终文本；`Debug events` 可展开看到包含 `interrupt` 与后续 `/resume` 的 `tool_end/final/run_end`，并且 **思考/工具过程不会在结束后消失**
+- 期望：`Timeline`（默认展开）能看到 `tool_use get_canvas_state` 与 `tool_result get_canvas_state`，且 output 摘要里能看到 `objects=<n>`（先手动在画板上创建至少 1 个对象再测更直观）
+- 期望：若触发 `/resume` HTTP 409（tool_call_id/tool_name mismatch），UI 会在 `Timeline/Debug events` 里记录 `client_error`（含 expected/got），便于排障
+
+---
+
 ### 运行前检查
 - 后端 `/api/providers` 能返回至少一个 endpoint（例如 `packy-glm47` / `kimi` 等）。
 - 前端模型下拉里能选到 **GLM 4.7 (Packy)**，并能看到 **Kimi**。

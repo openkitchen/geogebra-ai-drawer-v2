@@ -11,6 +11,7 @@
 - `docs/design/decisions.md`: 关键设计决策与取舍（context engineering vs deterministic rules）
 
 ### 规格（Spec）
+- `docs/spec/langgraph-orchestration.md`: Spec v2（目标态，允许破坏兼容）：LangGraph（Python）threads/checkpoints/interrupts + FastAPI SSE（thread/run）
 - `docs/spec/prompt-contract.md`: Prompt/Scenario 的组织方式与输出约束（DSL 结构）
 - `docs/spec/runtime-feedback-repair.md`: 运行时反馈、自我修正、回滚语义
 - `docs/spec/canvas-presets.md`: 画布预设（几何 vs 代数）、标签显示、角度数值标签策略

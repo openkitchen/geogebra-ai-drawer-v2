@@ -9,6 +9,9 @@
     "dev:client": "vite",
     "dev:server": "node server/index.mjs",
     "dev": "concurrently -n client,server -c \"cyan,magenta\" \"npm run dev:client\" \"npm run dev:server\"",
+    "dev:v2:web": "npm --prefix apps/web run dev",
+    "dev:v2:api": "cd apps/api && uv run uvicorn app.main:app --reload --port 3002",
+    "dev:v2": "concurrently -n web,api -c \"cyan,magenta\" \"npm run dev:v2:web\" \"npm run dev:v2:api\"",
     "build": "vite build",
     "preview": "vite preview",
     "start": "NODE_ENV=production node server/index.mjs"
