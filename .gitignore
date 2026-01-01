@@ -21,6 +21,7 @@ dist-ssr
 # Local tooling
 .cursor/
 .playwright-mcp/
+.langgraph_api/
 
 # Editor directories and files
 .vscode/*
