@@ -71,6 +71,25 @@ def _wants_triangle(user_text: str) -> bool:
     return ("三角形" in user_text) or ("triangle" in lowered)
 
 
+def _seems_asking_about_canvas(user_text: str) -> bool:
+    lowered = user_text.lower()
+    if "canvas" in lowered or "diagram" in lowered:
+        return True
+    return any(
+        k in user_text
+        for k in [
+            "画板",
+            "图里",
+            "图中",
+            "这张图",
+            "这个图",
+            "这幅图",
+            "当前图",
+            "现在图",
+        ]
+    )
+
+
 def _canvas_summary_text(state: GraphState) -> str:
     tool_results = state.get("tool_results", [])
     for entry in reversed(tool_results):
@@ -95,6 +114,24 @@ def _canvas_summary_text(state: GraphState) -> str:
         return f"我看到画板上现在有 {len(objects)} 个对象。"
 
     return "我暂时还拿不到画板对象列表。"
+
+
+def _llm_unavailable_text(state: GraphState) -> str:
+    run_id = state.get("run_id") or ""
+    if state.get("ui_debug") and run_id:
+        return (
+            "我这次没能调用语言模型来回答你的问题（可能是模型繁忙或配置缺失）。\n"
+            f"run_id: {run_id}\n"
+            "你可以稍后重试；或在本目录 `.env.local` 调整 `LLM_ROLE_BINDINGS_JSON` 把 main/fast 绑定到其他模型。"
+        )
+    return "我这次没能回答上来，你可以稍后再试一次。"
+
+
+def _fallback_text_without_llm(state: GraphState) -> str:
+    user_text = state.get("user_text") or ""
+    if _seems_asking_about_canvas(user_text):
+        return _canvas_summary_text(state)
+    return _llm_unavailable_text(state)
 
 
 def _looks_like_stub_summary(text: str) -> bool:
@@ -358,7 +395,7 @@ def _act_node_stub(state: GraphState) -> dict:
     if tool_calls_used >= tool_calls_limit:
         return {
             "next_step_kind": "final",
-            "answer_text": _canvas_summary_text(state),
+            "answer_text": _fallback_text_without_llm(state),
         }
 
     if state.get("needs_canvas_refresh") and remaining >= 1:
@@ -398,12 +435,12 @@ def _act_node_stub(state: GraphState) -> dict:
 
         return {
             "next_step_kind": "final",
-            "answer_text": _canvas_summary_text(state),
+            "answer_text": _fallback_text_without_llm(state),
         }
 
     return {
         "next_step_kind": "final",
-        "answer_text": _canvas_summary_text(state),
+        "answer_text": _fallback_text_without_llm(state),
     }
 
 
@@ -477,7 +514,7 @@ def act_node(state: GraphState) -> dict:
 
         return {
             "next_step_kind": "final",
-            "answer_text": _canvas_summary_text(state),
+            "answer_text": _fallback_text_without_llm(state),
             "model_calls_used": model_calls_used,
             "model_calls_limit": model_calls_limit,
         }
@@ -552,7 +589,7 @@ def act_node(state: GraphState) -> dict:
 
         return {
             "next_step_kind": "final",
-            "answer_text": _canvas_summary_text(state),
+            "answer_text": _fallback_text_without_llm(state),
             "model_calls_used": model_calls_used,
             "model_calls_limit": model_calls_limit,
         }
@@ -697,7 +734,7 @@ def act_node(state: GraphState) -> dict:
 
     return {
         "next_step_kind": "final",
-        "answer_text": _canvas_summary_text(state),
+        "answer_text": _fallback_text_without_llm(state),
         "model_calls_used": model_calls_used,
         "model_calls_limit": model_calls_limit,
     }

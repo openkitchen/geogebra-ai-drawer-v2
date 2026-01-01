@@ -6,6 +6,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "[v2] building web…"
 cd "$ROOT_DIR/apps/web"
+if [[ ! -d node_modules ]]; then
+  echo "[v2] web deps missing; installing…"
+  if [[ -f package-lock.json ]]; then
+    npm ci
+  else
+    npm install
+  fi
+fi
 npm run build
 
 echo "[v2] compiling api…"
@@ -13,4 +21,3 @@ cd "$ROOT_DIR/apps/api"
 uv run python -m compileall app >/dev/null
 
 echo "[v2] OK"
-

@@ -32,14 +32,15 @@ python -m pip install -e .
 # 可选：开启真实 LLM（当前 v2 仅支持 openai/openai-compatible）
 # 推荐：复用 v1 `.env.local` 的 LLM_MODEL_ALIASES_JSON + LLM_ROLE_BINDINGS_JSON
 # export V2_LLM_ROLE="main"          # 或 gemini_fast / gemini_think（OpenAI-compatible）
+# export V2_LLM_FALLBACK_ROLES="fast,fallback"  # 可选：主模型失败时自动换角色重试（逗号分隔）
 # （注意：若 role 指向 provider=google，目前会退回 stub，待 todo 120 补齐原生 Gemini）
 # 或：显式配置 OpenAI / OpenAI-compatible
 # export V2_LLM_API_KEY="..."
 # export V2_LLM_MODEL="gpt-5.2-chat-latest"
 # export V2_LLM_BASE_URL="https://api.vectorengine.ai/v1"  # 可选
 # 或：复用 v1 的 LLM_ENDPOINTS_JSON（仅 openai/openai-compatible）
-# 或：复用 v1 的 `.env.local`（默认会尝试读取本 worktree 的 `.env.local`，以及 sibling v1 `../geogebra-ai-drawer/.env.local`）
-# export V2_ENV_FILE="/absolute/path/to/.env.local"  # 可显式指定
+# 或：复用另一份 `.env.local`（例如 v1 的 key），但需要显式指定：
+# export V2_ENV_FILE="../geogebra-ai-drawer/.env.local"
 uvicorn app.main:app --port 3002
 ```
 

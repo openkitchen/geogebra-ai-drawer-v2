@@ -179,27 +179,66 @@ def _maybe_load_env_files() -> None:
         return
     _ENV_FILES_LOADED = True
 
-    override = os.getenv("V2_ENV_FILE")
-    candidates: list[Path] = []
+    root = _repo_root()
+    # Always prefer this worktree's env files.
+    candidates: list[Path] = [root / ".env.local", root / ".env"]
+
+    # Optional: load an additional env file to fill missing values (e.g. secrets).
+    # NOTE: this does NOT override existing env vars or values already loaded above.
+    override = (os.getenv("V2_ENV_FILE") or "").strip()
     if override:
         candidates.append(Path(override))
-
-    root = _repo_root()
-    candidates.extend([root / ".env.local", root / ".env"])
-
-    # v1 sibling worktree fallback (local dev convenience)
-    candidates.extend(
-        [
-            root.parent / "geogebra-ai-drawer" / ".env.local",
-            root.parent / "geogebra-ai-drawer" / ".env",
-        ]
-    )
 
     for path in candidates:
         if path.is_file():
             _load_env_file(path)
 
     _maybe_alias_langsmith_env_vars()
+
+
+def _parse_csv_env(key: str) -> list[str]:
+    raw = (os.getenv(key) or "").strip()
+    if not raw:
+        return []
+    parts: list[str] = []
+    for seg in raw.split(","):
+        s = seg.strip()
+        if s:
+            parts.append(s)
+    dedup: list[str] = []
+    for r in parts:
+        if r not in dedup:
+            dedup.append(r)
+    return dedup
+
+
+def _fallback_roles() -> list[str]:
+    _maybe_load_env_files()
+
+    explicit = _parse_csv_env("V2_LLM_FALLBACK_ROLES")
+    if explicit:
+        return explicit
+
+    # If v1-style role routing is present, try common roles that might be configured.
+    raw_bindings = os.getenv("LLM_ROLE_BINDINGS_JSON") or ""
+    if raw_bindings.strip():
+        try:
+            expanded = _expand_env_refs(_strip_wrapping_quotes(raw_bindings))
+            bindings = json.loads(expanded)
+        except Exception:
+            bindings = None
+
+        if isinstance(bindings, dict):
+            order = ["fast", "fallback", "repair", "gemini_fast", "gemini_think", "main"]
+            roles = [r for r in order if isinstance(bindings.get(r), str) and r.strip()]
+            if roles:
+                return roles
+
+    # Last resort: try "fast" if aliases exist (even if it may not be bound).
+    if (os.getenv("LLM_MODEL_ALIASES_JSON") or "").strip():
+        return ["fast"]
+
+    return []
 
 
 def load_llm_config_for_role(*, role: str | None) -> LlmConfig | None:
@@ -386,7 +425,17 @@ def load_llm_config_for_role(*, role: str | None) -> LlmConfig | None:
 
 def load_llm_config(role: str | None = None) -> LlmConfig | None:
     # Backward compatible function name used across the codebase.
-    return load_llm_config_for_role(role=role)
+    cfg = load_llm_config_for_role(role=role)
+    if cfg is not None or role is not None:
+        return cfg
+
+    # If the default role isn't configured, fall back to any configured role.
+    for r in _fallback_roles():
+        cfg2 = load_llm_config_for_role(role=r)
+        if cfg2 is not None:
+            return cfg2
+
+    return None
 
 
 @lru_cache(maxsize=8)
@@ -495,40 +544,12 @@ def generate_geogebra_commands(
     run_id: str | None = None,
     ui_debug: bool = False,
 ) -> list[str] | None:
-    role = "repair" if (runtime_feedback or "").strip() else "main"
-    cfg = load_llm_config(role=role)
-    if cfg is None:
-        _trace_llm_event(run_id=run_id, ui_debug=ui_debug, name="command_gen.config_missing", data={"role": role})
-        return None
-
-    llm = _build_llm(
-        api_key=cfg.api_key,
-        base_url=cfg.base_url,
-        model=cfg.model,
-        temperature=cfg.temperature,
-        timeout_s=cfg.timeout_s,
-    )
+    requested_role = "repair" if (runtime_feedback or "").strip() else "main"
 
     remaining = max(0, int(tool_calls_limit) - int(tool_calls_used))
     canvas_objects = _compact_canvas_objects(tool_results)
     commandbook = _load_prompt_asset("prompts/commandbook.json")
     constraints = _load_prompt_asset("prompts/geogebra-constraints.md")
-
-    _trace_llm_event(
-        run_id=run_id,
-        ui_debug=ui_debug,
-        name="command_gen.start",
-        data={
-            "role": role,
-            "model": cfg.model,
-            "base_url": cfg.base_url,
-            "remaining_tool_calls": remaining,
-            "user_text_preview": _preview_text(user_text, limit=160),
-            "has_runtime_feedback": bool((runtime_feedback or "").strip()),
-            "canvas_objects_compact_count": len(canvas_objects),
-        },
-    )
-    t0 = time.time()
 
     system = SystemMessage(
         content=(
@@ -566,74 +587,131 @@ def generate_geogebra_commands(
         )
     )
 
-    structured = llm.with_structured_output(ExecGeogebraCommandsInput)
+    roles_to_try = [requested_role] + [r for r in _fallback_roles() if r != requested_role]
+    roles_to_try = roles_to_try[:3]
 
-    def invoke_structured(messages: list[Any]) -> ExecGeogebraCommandsInput | None:
-        try:
-            result = structured.invoke(messages, config=_build_runnable_config(run_id=run_id, op="command_gen", role=role))
-        except Exception as e:
-            if run_id:
-                trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_geogebra_commands.structured_invoke", exc=e)
-            return None
-        if isinstance(result, ExecGeogebraCommandsInput):
-            return result
-        return None
+    for role in roles_to_try:
+        cfg = load_llm_config(role=role)
+        if cfg is None:
+            continue
 
-    def invoke_json_fallback() -> list[str] | None:
-        try:
-            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="command_gen", role=role))
-        except Exception as e:
-            if run_id:
-                trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_geogebra_commands.json_invoke", exc=e)
-            return None
-        content = getattr(msg, "content", None)
-        if not isinstance(content, str):
-            return None
-        blob = _extract_json_object(content)
-        if not blob:
-            return None
-        try:
-            payload = json.loads(blob)
-        except Exception:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        commands = payload.get("commands")
-        if not isinstance(commands, list):
-            return None
-        return _clean_commands(commands)
+        llm = _build_llm(
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            model=cfg.model,
+            temperature=cfg.temperature,
+            timeout_s=cfg.timeout_s,
+        )
 
-    result = invoke_structured([system, human])
-    if result is not None:
-        commands = _clean_commands(result.commands)
+        _trace_llm_event(
+            run_id=run_id,
+            ui_debug=ui_debug,
+            name="command_gen.start",
+            data={
+                "requested_role": requested_role,
+                "role": role,
+                "model": cfg.model,
+                "base_url": cfg.base_url,
+                "remaining_tool_calls": remaining,
+                "user_text_preview": _preview_text(user_text, limit=160),
+                "has_runtime_feedback": bool((runtime_feedback or "").strip()),
+                "canvas_objects_compact_count": len(canvas_objects),
+            },
+        )
+
+        t0 = time.time()
+        structured = llm.with_structured_output(ExecGeogebraCommandsInput)
+
+        def invoke_structured(messages: list[Any]) -> ExecGeogebraCommandsInput | None:
+            try:
+                result = structured.invoke(messages, config=_build_runnable_config(run_id=run_id, op="command_gen", role=role))
+            except Exception as e:
+                if run_id:
+                    trace_exception(
+                        run_id=run_id,
+                        ui_debug=ui_debug,
+                        where=f"generate_geogebra_commands.structured_invoke[{role}]",
+                        exc=e,
+                    )
+                return None
+            if isinstance(result, ExecGeogebraCommandsInput):
+                return result
+            return None
+
+        def invoke_json_fallback() -> list[str] | None:
+            try:
+                msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="command_gen", role=role))
+            except Exception as e:
+                if run_id:
+                    trace_exception(
+                        run_id=run_id,
+                        ui_debug=ui_debug,
+                        where=f"generate_geogebra_commands.json_invoke[{role}]",
+                        exc=e,
+                    )
+                return None
+            content = getattr(msg, "content", None)
+            if not isinstance(content, str):
+                return None
+            blob = _extract_json_object(content)
+            if not blob:
+                return None
+            try:
+                payload = json.loads(blob)
+            except Exception:
+                return None
+            if not isinstance(payload, dict):
+                return None
+            commands = payload.get("commands")
+            if not isinstance(commands, list):
+                return None
+            return _clean_commands(commands)
+
+        result = invoke_structured([system, human])
+        if result is not None:
+            commands = _clean_commands(result.commands)
+            took_ms = int((time.time() - t0) * 1000)
+            _trace_llm_event(
+                run_id=run_id,
+                ui_debug=ui_debug,
+                name="command_gen.ok",
+                data={
+                    "requested_role": requested_role,
+                    "role": role,
+                    "mode": "structured_output",
+                    "took_ms": took_ms,
+                    "commands_count": len(commands),
+                    "commands_preview": commands[:8],
+                },
+            )
+            return commands if commands else None
+
+        fallback = invoke_json_fallback()
         took_ms = int((time.time() - t0) * 1000)
         _trace_llm_event(
             run_id=run_id,
             ui_debug=ui_debug,
-            name="command_gen.ok",
+            name="command_gen.result",
             data={
-                "mode": "structured_output",
+                "requested_role": requested_role,
+                "role": role,
+                "mode": "json_fallback" if fallback else "none",
                 "took_ms": took_ms,
-                "commands_count": len(commands),
-                "commands_preview": commands[:8],
+                "commands_count": len(fallback) if fallback else 0,
+                "commands_preview": (fallback or [])[:8],
             },
         )
-        return commands if commands else None
 
-    fallback = invoke_json_fallback()
-    took_ms = int((time.time() - t0) * 1000)
+        if fallback:
+            return fallback
+
     _trace_llm_event(
         run_id=run_id,
         ui_debug=ui_debug,
-        name="command_gen.result",
-        data={
-            "mode": "json_fallback" if fallback else "none",
-            "took_ms": took_ms,
-            "commands_count": len(fallback) if fallback else 0,
-            "commands_preview": (fallback or [])[:8],
-        },
+        name="command_gen.failed",
+        data={"requested_role": requested_role, "roles_tried": roles_to_try},
     )
-    return fallback if fallback else None
+    return None
 
 
 def generate_final_answer(
@@ -645,38 +723,8 @@ def generate_final_answer(
     run_id: str | None = None,
     ui_debug: bool = False,
 ) -> str | None:
-    cfg = load_llm_config(role="main")
-    if cfg is None:
-        _trace_llm_event(run_id=run_id, ui_debug=ui_debug, name="final.config_missing", data={"role": "main"})
-        return None
-
-    llm = _build_llm(
-        api_key=cfg.api_key,
-        base_url=cfg.base_url,
-        model=cfg.model,
-        temperature=cfg.temperature,
-        timeout_s=cfg.timeout_s,
-    )
-
     canvas_objects = _compact_canvas_objects(tool_results)
     executed_commands = _compact_exec_commands(tool_results)
-
-    _trace_llm_event(
-        run_id=run_id,
-        ui_debug=ui_debug,
-        name="final.start",
-        data={
-            "role": "main",
-            "model": cfg.model,
-            "base_url": cfg.base_url,
-            "user_text_preview": _preview_text(user_text, limit=160),
-            "tool_calls_used": tool_calls_used,
-            "tool_calls_limit": tool_calls_limit,
-            "executed_commands_count": len(executed_commands),
-            "canvas_objects_compact_count": len(canvas_objects),
-        },
-    )
-    t0 = time.time()
 
     system = SystemMessage(
         content=(
@@ -701,57 +749,100 @@ def generate_final_answer(
         )
     )
 
-    try:
-        msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="final", role="main"))
-    except Exception as e:
-        if run_id:
-            trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_final_answer.invoke", exc=e)
-        return None
+    roles_to_try = ["main"] + [r for r in _fallback_roles() if r != "main"]
+    roles_to_try = roles_to_try[:3]
 
-    content = getattr(msg, "content", None)
-    if not isinstance(content, str):
+    for role in roles_to_try:
+        cfg = load_llm_config(role=role)
+        if cfg is None:
+            continue
+
+        llm = _build_llm(
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            model=cfg.model,
+            temperature=cfg.temperature,
+            timeout_s=cfg.timeout_s,
+        )
+
+        _trace_llm_event(
+            run_id=run_id,
+            ui_debug=ui_debug,
+            name="final.start",
+            data={
+                "role": role,
+                "model": cfg.model,
+                "base_url": cfg.base_url,
+                "user_text_preview": _preview_text(user_text, limit=160),
+                "tool_calls_used": tool_calls_used,
+                "tool_calls_limit": tool_calls_limit,
+                "executed_commands_count": len(executed_commands),
+                "canvas_objects_compact_count": len(canvas_objects),
+            },
+        )
+
+        t0 = time.time()
+        try:
+            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="final", role=role))
+        except Exception as e:
+            if run_id:
+                trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"generate_final_answer.invoke[{role}]", exc=e)
+            continue
+
+        content = getattr(msg, "content", None)
+        if not isinstance(content, str):
+            took_ms = int((time.time() - t0) * 1000)
+            _trace_llm_event(
+                run_id=run_id,
+                ui_debug=ui_debug,
+                name="final.bad_response",
+                data={
+                    "role": role,
+                    "took_ms": took_ms,
+                    "reason": "non_string_content",
+                    "content_type": type(content).__name__,
+                    "usage": _extract_usage_metadata(msg),
+                },
+            )
+            continue
+
+        text = content.strip()
+        if not text:
+            took_ms = int((time.time() - t0) * 1000)
+            _trace_llm_event(
+                run_id=run_id,
+                ui_debug=ui_debug,
+                name="final.bad_response",
+                data={
+                    "role": role,
+                    "took_ms": took_ms,
+                    "reason": "empty_text",
+                    "usage": _extract_usage_metadata(msg),
+                },
+            )
+            continue
+
         took_ms = int((time.time() - t0) * 1000)
         _trace_llm_event(
             run_id=run_id,
             ui_debug=ui_debug,
-            name="final.bad_response",
+            name="final.ok",
             data={
+                "role": role,
                 "took_ms": took_ms,
-                "reason": "non_string_content",
-                "content_type": type(content).__name__,
+                "text_preview": _preview_text(text, limit=320),
                 "usage": _extract_usage_metadata(msg),
             },
         )
-        return None
+        return text
 
-    text = content.strip()
-    if not text:
-        took_ms = int((time.time() - t0) * 1000)
-        _trace_llm_event(
-            run_id=run_id,
-            ui_debug=ui_debug,
-            name="final.bad_response",
-            data={
-                "took_ms": took_ms,
-                "reason": "empty_text",
-                "usage": _extract_usage_metadata(msg),
-            },
-        )
-        return None
-
-    took_ms = int((time.time() - t0) * 1000)
     _trace_llm_event(
         run_id=run_id,
         ui_debug=ui_debug,
-        name="final.ok",
-        data={
-            "took_ms": took_ms,
-            "text_preview": _preview_text(text, limit=320),
-            "usage": _extract_usage_metadata(msg),
-        },
+        name="final.failed",
+        data={"roles_tried": roles_to_try},
     )
-
-    return text
+    return None
 
 
 def decide_next_step(

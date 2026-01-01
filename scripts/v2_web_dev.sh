@@ -5,5 +5,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "$ROOT_DIR/apps/web"
-exec npm run dev
 
+if [[ ! -d node_modules ]]; then
+  echo "[web] node_modules not found. Installing dependencies…"
+  if [[ -f package-lock.json ]]; then
+    npm ci
+  else
+    npm install
+  fi
+fi
+
+exec npm run dev
