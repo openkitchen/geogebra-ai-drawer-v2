@@ -19,8 +19,7 @@ We have two levels:
 - `TriangleABC=Polygon(A,B,C)`
 - Optional: add a small right-angle marker (keep it minimal):
   - `angA=Angle(B,A,C)`
-  - `SetLabelVisible(angA,false)`
-  - `Text("直角",(0.2,0.2))`
+  - `Text("直角",(0.2,0.2))` (angle numeric label is hidden by the app)
 
 #### Level 2: squares on sides (only when explicitly requested)
 Given our environment stability constraints, keep Level 2 minimal and avoid `Intersect(...,1)`.
@@ -35,5 +34,4 @@ If you must show “squares”, only draw the two axis-aligned squares on the le
   - `sqAC=Polygon(A,F,G,C)`
 
 If anything fails, fall back to Level 1 only.
-
 

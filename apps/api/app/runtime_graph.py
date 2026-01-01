@@ -1,6 +1,7 @@
 import uuid
 import math
 import re
+import os
 from typing import Any, Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -9,13 +10,17 @@ from langgraph.graph import StateGraph
 from langgraph.types import interrupt
 from typing_extensions import TypedDict
 
-from .llm_decider import generate_final_answer, generate_geogebra_commands, load_llm_config
+from .llm_decider import generate_final_answer, generate_geogebra_commands, generate_plan, load_llm_config, summarize_memory
 from .canvas_diagnostics import compute_canvas_diagnostics
 
 class GraphState(TypedDict, total=False):
     run_id: str
     ui_debug: bool
+    plan_mode: bool
+    plan: list[dict[str, Any]]
     user_text: str
+    memory_summary: str
+    memory_messages: list[dict[str, Any]]
     tool_calls_used: int
     tool_calls_limit: int
     model_calls_used: int
@@ -33,6 +38,9 @@ class GraphState(TypedDict, total=False):
     last_exec_had_failure: bool
     last_exec_dialogs: list[str]
     last_verify_issues: list[str]
+    pending_numeric_eval: dict[str, Any]
+    measured_triangle_kinds: dict[str, str]
+    numeric_verified: bool
     next_step_kind: Literal["tool", "final"]
     next_tool_name: str
     next_tool_call_id: str
@@ -60,6 +68,127 @@ def _user_forbids_drawing(user_text: str) -> bool:
     if "don't draw" in lowered or "do not draw" in lowered or "no drawing" in lowered:
         return True
     return False
+
+
+def _read_int_env(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except Exception:
+        return default
+    return max(min_value, min(max_value, value))
+
+
+def _compact_memory_messages(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for m in messages[-24:]:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        text = m.get("text")
+        if role not in {"user", "assistant"}:
+            continue
+        if not isinstance(text, str):
+            continue
+        t = text.strip()
+        if not t:
+            continue
+        out.append({"role": role, "text": t[:2000]})
+    return out
+
+
+def ingest_node(state: GraphState) -> dict:
+    user_text = (state.get("user_text") or "").strip()
+    run_id = state.get("run_id")
+    ui_debug = bool(state.get("ui_debug"))
+
+    model_calls_used = int(state.get("model_calls_used", 0))
+    model_calls_limit = int(state.get("model_calls_limit", 6))
+
+    max_attempts = _read_int_env("V2_MAX_ATTEMPTS", 2, min_value=0, max_value=6)
+    max_messages = _read_int_env("V2_MEMORY_MAX_MESSAGES", 12, min_value=4, max_value=60)
+    keep_last = _read_int_env("V2_MEMORY_KEEP_LAST", 8, min_value=2, max_value=max_messages)
+
+    memory_messages = _compact_memory_messages(state.get("memory_messages"))
+    if user_text:
+        memory_messages.append({"role": "user", "text": user_text[:2000]})
+
+    memory_summary = (state.get("memory_summary") or "").strip()
+    if len(memory_messages) > max_messages:
+        to_summarize = memory_messages[: max(0, len(memory_messages) - keep_last)]
+        keep = memory_messages[-keep_last:]
+        can_use_llm = load_llm_config(role=os.getenv("V2_LLM_SUMMARY_ROLE") or "fast") is not None
+        if can_use_llm and model_calls_used < model_calls_limit:
+            model_calls_used += 1
+            summary = summarize_memory(
+                previous_summary=memory_summary or None,
+                messages=to_summarize,
+                run_id=run_id,
+                ui_debug=ui_debug,
+            )
+            if isinstance(summary, str) and summary.strip():
+                memory_summary = summary.strip()
+        memory_messages = keep
+
+    # Reset per-run ephemeral state so a new user turn starts cleanly.
+    return {
+        "did_draw": False,
+        "needs_canvas_refresh": False,
+        "regen_needed": False,
+        "attempt": 0,
+        "max_attempts": max_attempts,
+        "repair_feedback": "",
+        "pending_delete_objects": [],
+        "give_up_after_cleanup": False,
+        "last_exec_created_objects": [],
+        "last_exec_had_failure": False,
+        "last_exec_dialogs": [],
+        "last_verify_issues": [],
+        "pending_numeric_eval": {},
+        "measured_triangle_kinds": {},
+        "numeric_verified": False,
+        "memory_messages": memory_messages,
+        "memory_summary": memory_summary,
+        "model_calls_used": model_calls_used,
+        "model_calls_limit": model_calls_limit,
+    }
+
+
+def plan_node(state: GraphState) -> dict:
+    plan_mode = bool(state.get("plan_mode"))
+    if not plan_mode:
+        return {"plan": []}
+
+    user_text = (state.get("user_text") or "").strip()
+    if not user_text:
+        return {"plan": []}
+
+    run_id = state.get("run_id")
+    ui_debug = bool(state.get("ui_debug"))
+    model_calls_used = int(state.get("model_calls_used", 0))
+    model_calls_limit = int(state.get("model_calls_limit", 6))
+
+    can_use_llm = load_llm_config(role=os.getenv("V2_LLM_PLAN_ROLE") or "main") is not None
+    if not can_use_llm or model_calls_used >= model_calls_limit:
+        return {"plan": []}
+
+    model_calls_used += 1
+    steps = generate_plan(
+        user_text=user_text,
+        memory_summary=state.get("memory_summary") or None,
+        recent_messages=state.get("memory_messages") or None,
+        run_id=run_id,
+        ui_debug=ui_debug,
+    )
+    if not steps:
+        return {"plan": [], "model_calls_used": model_calls_used, "model_calls_limit": model_calls_limit}
+
+    plan = [{"id": f"p{i+1}", "text": s, "done": False} for i, s in enumerate(steps[:8]) if isinstance(s, str) and s.strip()]
+    return {"plan": plan, "model_calls_used": model_calls_used, "model_calls_limit": model_calls_limit}
 
 
 def _wants_circle(user_text: str) -> bool:
@@ -219,6 +348,18 @@ def _triangle_kind(a: tuple[float, float], b: tuple[float, float], c: tuple[floa
     return "acute"
 
 
+def _triangle_kind_from_sides2(s1: float, s2: float, s3: float) -> str:
+    sides = sorted([s1, s2, s3])
+    if sides[0] <= 1e-12:
+        return "degenerate"
+    tol = max(1e-6, 1e-3 * sides[2])
+    if abs((sides[0] + sides[1]) - sides[2]) <= tol:
+        return "right"
+    if (sides[0] + sides[1]) < (sides[2] - tol):
+        return "obtuse"
+    return "acute"
+
+
 def _list_triangle_candidates(objects: list[dict[str, Any]]) -> list[dict[str, Any]]:
     coords = _extract_point_coords(objects)
     center = coords.get("O")
@@ -284,6 +425,20 @@ def _verify_canvas(state: GraphState) -> tuple[bool, list[str]]:
     wants_inscribed = "内接" in user_text
 
     triangles = _list_triangle_candidates(objects)
+    measured = state.get("measured_triangle_kinds")
+    if isinstance(measured, dict) and measured:
+        for t in triangles:
+            if not isinstance(t, dict):
+                continue
+            if t.get("kind") != "unknown":
+                continue
+            vertices = t.get("vertices")
+            if not (isinstance(vertices, list) and len(vertices) == 3 and all(isinstance(v, str) for v in vertices)):
+                continue
+            key = ",".join(vertices)
+            kind = measured.get(key)
+            if isinstance(kind, str) and kind.strip():
+                t["kind"] = kind.strip()
 
     def ok_inscribed(t: dict[str, Any]) -> bool:
         if not wants_inscribed:
@@ -505,6 +660,8 @@ def act_node(state: GraphState) -> dict:
                         tool_calls_used=tool_calls_used,
                         tool_calls_limit=tool_calls_limit,
                         tool_results=state.get("tool_results"),
+                        memory_summary=state.get("memory_summary") or None,
+                        recent_messages=state.get("memory_messages") or None,
                         run_id=run_id,
                         ui_debug=ui_debug,
                     )
@@ -538,6 +695,8 @@ def act_node(state: GraphState) -> dict:
                 tool_calls_used=tool_calls_used,
                 tool_calls_limit=tool_calls_limit,
                 tool_results=state.get("tool_results"),
+                memory_summary=state.get("memory_summary") or None,
+                recent_messages=state.get("memory_messages") or None,
                 run_id=run_id,
                 ui_debug=ui_debug,
             )
@@ -613,6 +772,8 @@ def act_node(state: GraphState) -> dict:
                 tool_calls_used=tool_calls_used,
                 tool_calls_limit=tool_calls_limit,
                 tool_results=state.get("tool_results"),
+                memory_summary=state.get("memory_summary") or None,
+                recent_messages=state.get("memory_messages") or None,
                 run_id=run_id,
                 ui_debug=ui_debug,
             )
@@ -642,6 +803,8 @@ def act_node(state: GraphState) -> dict:
                 tool_calls_limit=tool_calls_limit,
                 tool_results=state.get("tool_results"),
                 runtime_feedback=state.get("repair_feedback") or None,
+                memory_summary=state.get("memory_summary") or None,
+                recent_messages=state.get("memory_messages") or None,
                 run_id=run_id,
                 ui_debug=ui_debug,
             )
@@ -678,6 +841,8 @@ def act_node(state: GraphState) -> dict:
                     tool_calls_limit=tool_calls_limit,
                     tool_results=state.get("tool_results"),
                     runtime_feedback=None,
+                    memory_summary=state.get("memory_summary") or None,
+                    recent_messages=state.get("memory_messages") or None,
                     run_id=run_id,
                     ui_debug=ui_debug,
                 )
@@ -709,6 +874,8 @@ def act_node(state: GraphState) -> dict:
                     tool_calls_used=tool_calls_used,
                     tool_calls_limit=tool_calls_limit,
                     tool_results=state.get("tool_results"),
+                    memory_summary=state.get("memory_summary") or None,
+                    recent_messages=state.get("memory_messages") or None,
                     run_id=run_id,
                     ui_debug=ui_debug,
                 )
@@ -728,6 +895,46 @@ def act_node(state: GraphState) -> dict:
                 "model_calls_used": model_calls_used,
                 "model_calls_limit": model_calls_limit,
             }
+
+        # If triangle semantics are required but cannot be verified from canvas snapshot alone,
+        # do a small numeric check before deciding it's wrong.
+        if (
+            (("missing_right_triangle" in issues) or ("missing_obtuse_triangle" in issues))
+            and state.get("numeric_verified") is not True
+            and remaining >= 1
+        ):
+            objects_latest = _extract_latest_canvas_objects(state)
+            triangles = _list_triangle_candidates(objects_latest)
+            unknown = [
+                t
+                for t in triangles
+                if isinstance(t, dict)
+                and t.get("kind") == "unknown"
+                and isinstance(t.get("vertices"), list)
+                and len(t.get("vertices")) == 3
+                and all(isinstance(v, str) and v.strip() for v in t.get("vertices"))
+            ]
+            if unknown:
+                want_both = ("missing_right_triangle" in issues) and ("missing_obtuse_triangle" in issues)
+                max_triangles = 2 if want_both else 1
+                selected = unknown[:max_triangles]
+                tri_vertices: list[list[str]] = []
+                exprs: list[str] = []
+                for t in selected:
+                    vs = [v.strip() for v in t.get("vertices")[:3]]
+                    tri_vertices.append(vs)
+                    a, b, c = vs[0], vs[1], vs[2]
+                    exprs.extend([f"Distance({a},{b})^2", f"Distance({b},{c})^2", f"Distance({c},{a})^2"])
+                if exprs:
+                    return {
+                        "pending_numeric_eval": {"triangles": tri_vertices, "group_size": 3},
+                        "next_step_kind": "tool",
+                        "next_tool_name": "eval_numeric",
+                        "next_tool_call_id": str(uuid.uuid4()),
+                        "next_tool_input": {"expressions": exprs},
+                        "model_calls_used": model_calls_used,
+                        "model_calls_limit": model_calls_limit,
+                    }
 
         # Failed verification: rollback and repair if budget permits.
         feedback = _build_runtime_feedback(state, issues)
@@ -781,6 +988,8 @@ def act_node(state: GraphState) -> dict:
             tool_calls_used=tool_calls_used,
             tool_calls_limit=tool_calls_limit,
             tool_results=state.get("tool_results"),
+            memory_summary=state.get("memory_summary") or None,
+            recent_messages=state.get("memory_messages") or None,
             run_id=run_id,
             ui_debug=ui_debug,
         )
@@ -795,6 +1004,46 @@ def act_node(state: GraphState) -> dict:
     return {
         "next_step_kind": "final",
         "answer_text": _fallback_text_without_llm(state),
+        "model_calls_used": model_calls_used,
+        "model_calls_limit": model_calls_limit,
+    }
+
+
+def finalize_node(state: GraphState) -> dict:
+    answer_text = (state.get("answer_text") or "").strip()
+    run_id = state.get("run_id")
+    ui_debug = bool(state.get("ui_debug"))
+
+    model_calls_used = int(state.get("model_calls_used", 0))
+    model_calls_limit = int(state.get("model_calls_limit", 6))
+
+    max_messages = _read_int_env("V2_MEMORY_MAX_MESSAGES", 12, min_value=4, max_value=60)
+    keep_last = _read_int_env("V2_MEMORY_KEEP_LAST", 8, min_value=2, max_value=max_messages)
+
+    memory_messages = _compact_memory_messages(state.get("memory_messages"))
+    if answer_text:
+        memory_messages.append({"role": "assistant", "text": answer_text[:2000]})
+
+    memory_summary = (state.get("memory_summary") or "").strip()
+    if len(memory_messages) > max_messages:
+        to_summarize = memory_messages[: max(0, len(memory_messages) - keep_last)]
+        keep = memory_messages[-keep_last:]
+        can_use_llm = load_llm_config(role=os.getenv("V2_LLM_SUMMARY_ROLE") or "fast") is not None
+        if can_use_llm and model_calls_used < model_calls_limit:
+            model_calls_used += 1
+            summary = summarize_memory(
+                previous_summary=memory_summary or None,
+                messages=to_summarize,
+                run_id=run_id,
+                ui_debug=ui_debug,
+            )
+            if isinstance(summary, str) and summary.strip():
+                memory_summary = summary.strip()
+        memory_messages = keep
+
+    return {
+        "memory_messages": memory_messages,
+        "memory_summary": memory_summary,
         "model_calls_used": model_calls_used,
         "model_calls_limit": model_calls_limit,
     }
@@ -858,6 +1107,52 @@ def frontend_tool_node(state: GraphState) -> dict:
         updates["last_exec_dialogs"] = dialogs
         updates["last_exec_had_failure"] = had_failure
 
+    if tool_name == "eval_numeric":
+        measured_prev = state.get("measured_triangle_kinds")
+        measured: dict[str, str] = dict(measured_prev) if isinstance(measured_prev, dict) else {}
+        pending = state.get("pending_numeric_eval")
+
+        if isinstance(resume_value, dict) and resume_value.get("ok") is True:
+            output = resume_value.get("output")
+            if isinstance(output, dict) and isinstance(output.get("results"), list):
+                values: list[float | None] = []
+                for r in output.get("results")[:60]:
+                    if not isinstance(r, dict):
+                        values.append(None)
+                        continue
+                    ok = r.get("ok") is True
+                    v = r.get("value")
+                    if ok and isinstance(v, (int, float)):
+                        values.append(float(v))
+                    else:
+                        values.append(None)
+
+                if isinstance(pending, dict):
+                    tris = pending.get("triangles")
+                    group_size = pending.get("group_size", 3)
+                    try:
+                        group_size_i = int(group_size)
+                    except Exception:
+                        group_size_i = 3
+                    if isinstance(tris, list) and group_size_i >= 3:
+                        for i, verts in enumerate(tris[:8]):
+                            if not (isinstance(verts, list) and len(verts) == 3):
+                                continue
+                            if not all(isinstance(v2, str) and v2.strip() for v2 in verts):
+                                continue
+                            idx = i * group_size_i
+                            if idx + 2 >= len(values):
+                                continue
+                            a2, b2, c2 = values[idx], values[idx + 1], values[idx + 2]
+                            if a2 is None or b2 is None or c2 is None:
+                                continue
+                            kind = _triangle_kind_from_sides2(a2, b2, c2)
+                            measured[",".join([v2.strip() for v2 in verts])] = kind
+
+        updates["measured_triangle_kinds"] = measured
+        updates["pending_numeric_eval"] = {}
+        updates["numeric_verified"] = True
+
     if tool_name == "delete_objects":
         # After deletion/rollback, refresh canvas state before regenerating commands.
         updates["needs_canvas_refresh"] = True
@@ -868,18 +1163,24 @@ def frontend_tool_node(state: GraphState) -> dict:
 _checkpointer = InMemorySaver()
 
 _builder = StateGraph(GraphState)
+_builder.add_node("ingest_node", ingest_node)
+_builder.add_node("plan_node", plan_node)
 _builder.add_node("act_node", act_node)
+_builder.add_node("finalize_node", finalize_node)
 _builder.add_node("frontend_tool_node", frontend_tool_node)
 _builder.add_conditional_edges(
     "act_node",
     lambda state: state["next_step_kind"],
     {
         "tool": "frontend_tool_node",
-        "final": END,
+        "final": "finalize_node",
     },
 )
-_builder.add_edge(START, "act_node")
+_builder.add_edge(START, "ingest_node")
+_builder.add_edge("ingest_node", "plan_node")
+_builder.add_edge("plan_node", "act_node")
 _builder.add_edge("frontend_tool_node", "act_node")
+_builder.add_edge("finalize_node", END)
 
 # `graph` is the entrypoint used by LangGraph Studio (langgraph dev). The runtime platform
 # provides persistence automatically, so we must not attach a custom checkpointer here.

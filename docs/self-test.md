@@ -92,7 +92,7 @@ curl -sS "http://127.0.0.1:3002/api/threads/${THREAD_ID}/state" | jq .
 curl -sS "http://127.0.0.1:3002/api/threads/${THREAD_ID}/state/history?limit=5" | jq .
 curl -sS -N -H 'Content-Type: application/json' \
   -X POST "http://127.0.0.1:3002/api/threads/${THREAD_ID}/runs/stream" \
-  -d '{"input":{"user_text":"hi"},"ui_context":{"debug":true,"plan_mode":false}}'
+  -d '{"input":{"user_text":"hi"},"ui_context":{"debug":true,"plan_mode":true}}'
 ```
 
 ### 脚本自测（可选，免手动复制 tool_call_id）
@@ -178,7 +178,8 @@ npm run dev
 浏览器打开 `http://127.0.0.1:3000/`：
 - 期望：页面左侧显示 GeoGebra Classic 画板，状态显示 `ggbApplet: ready`；可用工具栏手动创建点/线
 - 发送一条消息（例如 “hi from ui”）
-- 期望：assistant bubble 显示最终文本；`Debug events` 可展开看到包含 `interrupt` 与后续 `/resume` 的 `tool_end/final/run_end`，并且 **思考/工具过程不会在结束后消失**
+- 期望：assistant bubble 显示最终文本；`Debug events` 可展开看到包含 `interrupt` 与后续 `/resume` 的 `tool_end/final/run_end`，并且 **进展/工具过程不会在结束后消失**
+- 期望：`Trace info` 默认折叠；展开后 `Copy run_id/thread_id` 会复制带 key 前缀的整行（例如 `run_id: <uuid>`）
 - 期望：`Timeline`（默认展开）能看到 `tool_use get_canvas_state` 与 `tool_result get_canvas_state`，且 output 摘要里能看到 `objects=<n>`（先手动在画板上创建至少 1 个对象再测更直观）
 - 期望：若触发 `/resume` HTTP 409（tool_call_id/tool_name mismatch），UI 会在 `Timeline/Debug events` 里记录 `client_error`（含 expected/got），便于排障
 

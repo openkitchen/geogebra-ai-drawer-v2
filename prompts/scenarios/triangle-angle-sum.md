@@ -24,14 +24,7 @@ When the user asks:
    - `angC=Angle(A,C,B)`      // ∠C（避免 360-∠C）
    - `angB2=Angle(lAB,l)`     // 对应 ∠B
    - `angC2=Angle(l,lAC)`     // 对应 ∠C
-4. Hide numeric labels (keep arcs only):
-   - `SetLabelVisible(angA,false)`
-   - `SetLabelVisible(angB,false)`
-   - `SetLabelVisible(angC,false)`
-   - `SetLabelVisible(angB2,false)`
-   - `SetLabelVisible(angC2,false)`
-   - Optionally: `SetLabelVisible(l,false)`, `SetLabelVisible(lBC,false)`
-5. Text anchors（用文字而不是额外角对象来减轻拥挤）:
+4. Text anchors（用文字而不是额外角对象来减轻拥挤；角度数值标签由应用层隐藏）:
    - `Text("α",(0.4,0.4))`
    - `Text("β",(3.7,0.3))`
    - `Text("γ",(1.1,2.6))`
@@ -41,5 +34,4 @@ When the user asks:
 - 不要添加额外的辅助点/线；不要做坐标偏移构造（如 `D = C + (-2,0)`）。
 - 只保留上述角对象；若模型发现角对象过多或标签拥挤，应删减而不是再新增。
 - 依赖前端的几何预设（隐藏轴/网格、显示关键点标签），不必额外开坐标系。
-
 

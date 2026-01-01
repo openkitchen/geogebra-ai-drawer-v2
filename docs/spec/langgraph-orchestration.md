@@ -646,7 +646,8 @@ flowchart TD
 - `get_canvas_state`：列对象、读坐标/可见性/标签等（基于现图任务必需）
 
 2) **Measure（测量/计算）**
-- `eval_expression`：距离、角度、相等等验证；用于“尝试→验证→修正”的闭环
+- `eval_numeric`：返回可读数值（距离/角度/约束等）；用于“尝试→验证→修正”的闭环（推荐，尽量无残留）
+- `eval_expression`：执行表达式/命令并返回 labels（必要时使用；更偏“执行/探测”而非纯数值）
 
 3) **Write（写入/编辑）**
 - `exec_geogebra_commands`：最薄写入层，允许分段作图；失败返回结构化错误以便修复
@@ -696,7 +697,8 @@ flowchart TD
 1) thread 持久化可用：同一 `thread_id` 多次 run 都能读到历史 state。
 2) 前端工具 interrupt/resume 链路可用：
    - `get_canvas_state`（读）
-   - `eval_expression`（测，v2 当前为最小实现，后续可扩展为数值测量）
+   - `eval_numeric`（测，返回数值；v2 当前为最小实现）
+   - `eval_expression`（测/探测，返回 labels）
    - `exec_geogebra_commands`（写）
    - `delete_objects`（清理）
 3) streaming 可用：UI 能实时看到 tokens + interrupt + tool events。

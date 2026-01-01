@@ -216,6 +216,30 @@ def _try_eval_point(rhs: str, known: dict[str, tuple[float, float]]) -> tuple[fl
     return None
 
 
+_DISTANCE_RE = re.compile(
+    r"distance\(\s*([A-Za-z][A-Za-z0-9_]*)\s*,\s*([A-Za-z][A-Za-z0-9_]*)\s*\)\s*(?:\^\s*2\s*)?$",
+    re.IGNORECASE,
+)
+
+
+def _try_eval_distance(expr: str, known: dict[str, tuple[float, float]]) -> float | None:
+    s = expr.strip()
+    m = _DISTANCE_RE.match(s)
+    if not m:
+        return None
+    a = m.group(1)
+    b = m.group(2)
+    if a not in known or b not in known:
+        return None
+    ax, ay = known[a]
+    bx, by = known[b]
+    dx = ax - bx
+    dy = ay - by
+    d2 = dx * dx + dy * dy
+    # Support both Distance(A,B) and Distance(A,B)^2 by inspecting raw text.
+    return d2 if "^" in s else math.sqrt(d2)
+
+
 @dataclass
 class FakeCanvas:
     objects: list[dict[str, Any]] = field(default_factory=list)
@@ -279,6 +303,25 @@ class FakeCanvas:
             )
             created.append(label)
         return created
+
+    def point_coords(self) -> dict[str, tuple[float, float]]:
+        coords: dict[str, tuple[float, float]] = {}
+        for obj in self.objects:
+            if not isinstance(obj, dict):
+                continue
+            if str(obj.get("type") or "").lower() != "point":
+                continue
+            name = obj.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            value = obj.get("valueString")
+            if not isinstance(value, str):
+                continue
+            xy = _parse_point_coords(value)
+            if xy is None:
+                continue
+            coords[name] = xy
+        return coords
 
     def delete_objects(self, names: list[str]) -> list[str]:
         deleted: list[str] = []
@@ -367,6 +410,38 @@ def _make_tool_output(
             "failed_objects": [{"object_name": n, "message": "not found"} for n in failed] if failed else None,
             "dialogs": None,
         }
+
+    if tool_name == "eval_numeric":
+        exprs: list[str] = []
+        if isinstance(tool_input, dict) and isinstance(tool_input.get("expressions"), list):
+            exprs = [str(x) for x in tool_input.get("expressions") or [] if str(x).strip()]
+        coords = canvas.point_coords()
+        results: list[dict[str, Any]] = []
+        for expr in exprs[:24]:
+            value = _try_eval_distance(expr, coords)
+            if value is None:
+                results.append(
+                    {
+                        "expression": expr,
+                        "ok": False,
+                        "value": None,
+                        "value_string": None,
+                        "temp_label": None,
+                        "error": {"message": "unsupported expression in smoke stub"},
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "expression": expr,
+                        "ok": True,
+                        "value": float(value),
+                        "value_string": str(float(value)),
+                        "temp_label": None,
+                        "error": None,
+                    }
+                )
+        return {"results": results, "dialogs": None}
 
     return {"stub": True}
 

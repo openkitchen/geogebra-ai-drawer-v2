@@ -18,11 +18,12 @@ from .protocol_v2 import (
     DeleteObjectsInput,
     ExecGeogebraCommandsInput,
     EvalExpressionInput,
+    EvalNumericInput,
     GetCanvasStateInput,
 )
 
 
-ALLOWED_TOOL_NAMES = {"get_canvas_state", "exec_geogebra_commands", "eval_expression", "delete_objects"}
+ALLOWED_TOOL_NAMES = {"get_canvas_state", "exec_geogebra_commands", "eval_expression", "eval_numeric", "delete_objects"}
 
 
 class ActDecision(BaseModel):
@@ -519,6 +520,71 @@ def _load_prompt_asset(rel_path: str) -> str:
         return ""
 
 
+@lru_cache(maxsize=8)
+def _load_prompt_dir(rel_dir: str, *, suffix: str = ".md") -> list[str]:
+    root = _repo_root()
+    dir_path = root / rel_dir
+    try:
+        files = sorted([p for p in dir_path.iterdir() if p.is_file() and p.name.endswith(suffix)], key=lambda p: p.name)
+    except Exception:
+        return []
+
+    parts: list[str] = []
+    for p in files:
+        try:
+            text = p.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if text:
+            parts.append(text)
+    return parts
+
+
+def _compose_prompt_parts(parts: list[str]) -> str:
+    cleaned = [p.strip() for p in parts if isinstance(p, str) and p.strip()]
+    return "\n\n---\n\n".join(cleaned)
+
+
+def _format_memory_context(
+    *,
+    memory_summary: str | None,
+    recent_messages: list[dict[str, Any]] | None,
+    max_chars: int = 1600,
+) -> str:
+    lines: list[str] = []
+    summary = (memory_summary or "").strip()
+    if summary:
+        lines.append("conversation_summary:")
+        lines.append(summary)
+
+    if recent_messages:
+        items: list[str] = []
+        for m in recent_messages[-16:]:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            text = m.get("text")
+            if role not in {"user", "assistant"}:
+                continue
+            if not isinstance(text, str):
+                continue
+            t = text.strip()
+            if not t:
+                continue
+            t = t if len(t) <= 400 else (t[:400] + "…")
+            items.append(f"{role}: {t}")
+        if items:
+            lines.append("recent_messages:")
+            lines.extend(items)
+
+    blob = "\n".join(lines).strip()
+    if not blob:
+        return ""
+    if len(blob) <= max_chars:
+        return blob
+    return blob[:max_chars] + "…"
+
+
 def _clean_commands(commands: list[Any]) -> list[str]:
     cleaned: list[str] = []
     for c in commands:
@@ -529,7 +595,13 @@ def _clean_commands(commands: list[Any]) -> list[str]:
             continue
         normalized = re.sub(r"\s+", "", s).lower()
         # Never allow tool names to leak into commands.
-        if "get_canvas_state" in s or "exec_geogebra_commands" in s or "eval_expression" in s:
+        if (
+            "get_canvas_state" in s
+            or "exec_geogebra_commands" in s
+            or "eval_expression" in s
+            or "eval_numeric" in s
+            or "delete_objects" in s
+        ):
             continue
         # Disallow UI-only / JS-API-only operations. Canvas hygiene and label visibility are handled
         # deterministically in the frontend tool runner.
@@ -559,52 +631,39 @@ def generate_geogebra_commands(
     tool_calls_limit: int,
     tool_results: list[dict[str, Any]] | None,
     runtime_feedback: str | None,
+    memory_summary: str | None = None,
+    recent_messages: list[dict[str, Any]] | None = None,
     run_id: str | None = None,
     ui_debug: bool = False,
 ) -> list[str] | None:
     requested_role = "repair" if (runtime_feedback or "").strip() else "main"
+    phase_pack = "repair" if (runtime_feedback or "").strip() else "draw"
 
     remaining = max(0, int(tool_calls_limit) - int(tool_calls_used))
     canvas_objects = _compact_canvas_objects(tool_results)
-    commandbook = _load_prompt_asset("prompts/commandbook.json")
-    constraints = _load_prompt_asset("prompts/geogebra-constraints.md")
+    memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
 
-    system = SystemMessage(
-        content=(
-            "You are GeoGebraTutor.\n"
-            "You generate GeoGebra Classic commands for a browser canvas.\n"
-            "Follow constraints and avoid fragile constructions.\n"
-            "\n"
-            "Rules:\n"
-            f"- Remaining frontend tool calls (this run): {remaining}\n"
-            "- Return a COMPLETE command list for the user's request (not a patch).\n"
-            "- Prefer stable labels (A,B,C,O,c,T,...) so we can verify and refer to them.\n"
-            "- For key objects (circle/triangle/important lines), ALWAYS use explicit assignment labels (e.g. c = Circle(...), T = Polygon(...)).\n"
-            "- Avoid Point(circle) that can coincide with existing points; prefer Rotate/Intersect/explicit construction when choosing points on a circle.\n"
-            "- If you need to delete and redraw, include Delete(...) commands ONLY if you are sure; otherwise regenerate cleanly.\n"
-            "- IMPORTANT: You can ONLY output GeoGebra Input Bar commands executable by evalCommand.\n"
-            "- Do NOT include JS API / UI-only calls in commands[] (e.g. ShowLabel, SetLabelVisible, SetCaption, SetColor, ShowAxes, ShowGrid).\n"
-            "- Labels/visibility/styling/canvas hygiene are handled deterministically by the frontend.\n"
-            "\n"
-            "Output format (STRICT):\n"
-            "Return ONLY a JSON object: {\"commands\": string[]}.\n"
-            "No markdown. No extra keys.\n"
-            "\n"
-            f"{constraints}\n"
-            "\n"
-            "Commandbook (JSON, reference):\n"
-            f"{commandbook}\n"
-        )
-    )
+    system_parts: list[str] = [
+        _load_prompt_asset("prompts/v2/command_gen_system.md"),
+        _load_prompt_asset("prompts/geogebra-constraints.md"),
+        _load_prompt_asset(f"prompts/packs/{phase_pack}.md"),
+        *_load_prompt_dir("prompts/scenarios"),
+    ]
+    commandbook = _load_prompt_asset("prompts/commandbook.json")
+    if commandbook:
+        system_parts.append("Commandbook (JSON, reference):\n" + commandbook)
+    system = SystemMessage(content=_compose_prompt_parts(system_parts))
 
     feedback_text = (runtime_feedback or "").strip()
     human = HumanMessage(
         content=(
             f"user_text: {user_text}\n"
-            f"tool_calls_used: {tool_calls_used}\n"
-            f"tool_calls_limit: {tool_calls_limit}\n"
-            f"canvas_objects (latest, up to 12): {canvas_objects}\n"
-            f"runtime_feedback: {feedback_text}\n"
+            + (f"{memory_ctx}\n" if memory_ctx else "")
+            + f"tool_calls_used: {tool_calls_used}\n"
+            + f"tool_calls_limit: {tool_calls_limit}\n"
+            + f"remaining_tool_calls: {remaining}\n"
+            + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+            + f"runtime_feedback: {feedback_text}\n"
         )
     )
 
@@ -741,32 +800,25 @@ def generate_final_answer(
     tool_calls_used: int,
     tool_calls_limit: int,
     tool_results: list[dict[str, Any]] | None,
+    memory_summary: str | None = None,
+    recent_messages: list[dict[str, Any]] | None = None,
     run_id: str | None = None,
     ui_debug: bool = False,
 ) -> str | None:
     canvas_objects = _compact_canvas_objects(tool_results)
     executed_commands = _compact_exec_commands(tool_results)
+    memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
 
-    system = SystemMessage(
-        content=(
-            "You are a GeoGebra tutor.\n"
-            "Write a final response in Chinese for a child.\n"
-            "Do NOT use emojis.\n"
-            "Be strictly truthful: ONLY describe drawings that are supported by executed_commands/canvas_objects.\n"
-            "If the user asked to draw something but it is NOT present, say it was not drawn yet and what you can do next.\n"
-            "If the user asked to draw, explain what you actually drew in short steps and mention object names when helpful.\n"
-            "If the user asked for explanation only, do NOT talk about drawing unless the user asked.\n"
-            "Keep it short and clear.\n"
-        )
-    )
+    system = SystemMessage(content=_load_prompt_asset("prompts/v2/final_system.md"))
 
     human = HumanMessage(
         content=(
             f"user_text: {user_text}\n"
-            f"tool_calls_used: {tool_calls_used}\n"
-            f"tool_calls_limit: {tool_calls_limit}\n"
-            f"executed_commands (latest, up to 12): {executed_commands}\n"
-            f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+            + (f"{memory_ctx}\n" if memory_ctx else "")
+            + f"tool_calls_used: {tool_calls_used}\n"
+            + f"tool_calls_limit: {tool_calls_limit}\n"
+            + f"executed_commands (latest, up to 12): {executed_commands}\n"
+            + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
         )
     )
 
@@ -872,6 +924,8 @@ def decide_next_step(
     tool_calls_used: int,
     tool_calls_limit: int,
     tool_results: list[dict[str, Any]] | None,
+    memory_summary: str | None = None,
+    recent_messages: list[dict[str, Any]] | None = None,
     canvas_diagnostics: dict[str, Any] | None = None,
     repair_hint: str | None = None,
 ) -> ActDecision | None:
@@ -891,49 +945,20 @@ def decide_next_step(
     canvas_objects = _compact_canvas_objects(tool_results)
     diagnostics = canvas_diagnostics or {}
     repair_hint_text = (repair_hint or "").strip()
+    memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
 
-    system = SystemMessage(
-        content=(
-            "You are a GeoGebra tutor.\n"
-            "You cannot directly access GeoGebra; you must request a frontend tool when needed.\n"
-            "You must follow the output schema strictly.\n"
-            "\n"
-            "Available tools:\n"
-            "- get_canvas_state: input { include: [\"objects\"] }\n"
-            "- eval_expression: input { expression: string }\n"
-            "- exec_geogebra_commands: input { commands: string[] }\n"
-            "\n"
-            "Rules:\n"
-            f"- You have {remaining} tool calls remaining in this run.\n"
-            "- If remaining tool calls is 0, you MUST choose next_step_kind=final.\n"
-            "- Tool calls are limited, so plan ahead.\n"
-            "- If the user asks to draw multiple things, try to include ALL required commands in as few exec_geogebra_commands calls as possible (ideally one).\n"
-            "- If the canvas already has relevant objects (e.g. a circle), prefer reusing them instead of creating duplicates unless the user asks to restart.\n"
-            "- Prefer giving explicit labels to important objects (e.g. T = Polygon(A, B, C)) so the user can refer to them.\n"
-            "- After drawing/modifying, verify the result using canvas_objects and/or eval_expression.\n"
-            "- If the result does not match the user's request or looks degenerate (e.g. zero-length segments / zero-area polygons), you MUST fix it before finishing (tool budget permitting).\n"
-            "- Only request exec_geogebra_commands if the user explicitly asks to draw/create/modify objects on the canvas.\n"
-            "- If the user complains that a requested drawing is missing/wrong, treat it as a request to fix the drawing (use exec_geogebra_commands if needed).\n"
-            "- If the user asks for explanation only (no drawing), choose next_step_kind=final.\n"
-            "- If the user says do NOT draw, do NOT call exec_geogebra_commands.\n"
-            "- If you request a tool, do NOT include any explanation in the tool input.\n"
-            "- GeoGebra commands must be plain commands only; no tool names inside commands.\n"
-            "- If you can answer without more tools, choose next_step_kind=final.\n"
-            "- final.answer_text must be in Chinese and child-friendly.\n"
-            "- Do NOT use emojis.\n"
-            "- If repair_hint is present, you MUST choose next_step_kind=tool with exec_geogebra_commands to fix the issue.\n"
-            "- When next_step_kind=final, always provide answer_text.\n"
-        )
-    )
+    system_text = _load_prompt_asset("prompts/v2/act_system.md")
+    system = SystemMessage(content=(system_text + f"\n\nRemaining tool calls in this run: {remaining}").strip())
 
     human = HumanMessage(
         content=(
             f"user_text: {user_text}\n"
-            f"tool_calls_used: {tool_calls_used}\n"
-            f"tool_calls_limit: {tool_calls_limit}\n"
-            f"canvas_objects (latest, up to 12): {canvas_objects}\n"
-            f"canvas_diagnostics: {diagnostics}\n"
-            f"repair_hint: {repair_hint_text}\n"
+            + (f"{memory_ctx}\n" if memory_ctx else "")
+            + f"tool_calls_used: {tool_calls_used}\n"
+            + f"tool_calls_limit: {tool_calls_limit}\n"
+            + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+            + f"canvas_diagnostics: {diagnostics}\n"
+            + f"repair_hint: {repair_hint_text}\n"
             "\n"
             "Decide the next step."
         )
@@ -961,7 +986,7 @@ def decide_next_step(
                 "Return ONLY a JSON object that matches this schema:\n"
                 "{\n"
                 '  "next_step_kind": "tool" | "final",\n'
-                '  "next_tool_name": "get_canvas_state" | "exec_geogebra_commands" | null,\n'
+                '  "next_tool_name": "get_canvas_state" | "eval_expression" | "eval_numeric" | "exec_geogebra_commands" | "delete_objects" | null,\n'
                 '  "next_tool_input": object | null,\n'
                 '  "answer_text": string | null\n'
                 "}\n"
@@ -1018,6 +1043,8 @@ def decide_next_step(
                 GetCanvasStateInput.model_validate(decision.next_tool_input)
             elif decision.next_tool_name == "eval_expression":
                 EvalExpressionInput.model_validate(decision.next_tool_input)
+            elif decision.next_tool_name == "eval_numeric":
+                EvalNumericInput.model_validate(decision.next_tool_input)
             elif decision.next_tool_name == "exec_geogebra_commands":
                 ExecGeogebraCommandsInput.model_validate(decision.next_tool_input)
             elif decision.next_tool_name == "delete_objects":
@@ -1026,3 +1053,189 @@ def decide_next_step(
             return None
 
     return decision
+
+
+class PlanSteps(BaseModel):
+    steps: list[str]
+
+    @model_validator(mode="after")
+    def _validate(self) -> "PlanSteps":
+        clean = [s.strip() for s in self.steps if isinstance(s, str) and s.strip()]
+        if not clean:
+            raise ValueError("steps must be a non-empty list of strings")
+        self.steps = clean[:8]
+        return self
+
+
+def generate_plan(
+    *,
+    user_text: str,
+    memory_summary: str | None,
+    recent_messages: list[dict[str, Any]] | None,
+    run_id: str | None = None,
+    ui_debug: bool = False,
+) -> list[str] | None:
+    cfg = load_llm_config(role=os.getenv("V2_LLM_PLAN_ROLE") or "main")
+    if cfg is None:
+        return None
+
+    llm = _build_llm(
+        api_key=cfg.api_key,
+        base_url=cfg.base_url,
+        model=cfg.model,
+        temperature=cfg.temperature,
+        timeout_s=cfg.timeout_s,
+    )
+
+    memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
+    system_text = _load_prompt_asset("prompts/v2/plan_system.md")
+    system = SystemMessage(content=system_text)
+    human = HumanMessage(content=f"user_text: {user_text}\n" + (f"{memory_ctx}\n" if memory_ctx else ""))
+
+    structured = llm.with_structured_output(PlanSteps)
+
+    def invoke_structured() -> PlanSteps | None:
+        try:
+            result = structured.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="plan", role="plan"))
+        except Exception as e:
+            if run_id:
+                trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_plan.structured_invoke", exc=e)
+            return None
+        if isinstance(result, PlanSteps):
+            return result
+        return None
+
+    def invoke_json_fallback() -> list[str] | None:
+        try:
+            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="plan", role="plan"))
+        except Exception as e:
+            if run_id:
+                trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_plan.json_invoke", exc=e)
+            return None
+        content = getattr(msg, "content", None)
+        if not isinstance(content, str):
+            return None
+        blob = _extract_json_object(content)
+        if not blob:
+            return None
+        try:
+            payload = json.loads(blob)
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        steps = payload.get("steps")
+        if not isinstance(steps, list):
+            return None
+        clean = [s.strip() for s in steps if isinstance(s, str) and s.strip()]
+        return clean[:8] if clean else None
+
+    out = invoke_structured()
+    if out is not None:
+        return out.steps
+    return invoke_json_fallback()
+
+
+class MemorySummary(BaseModel):
+    summary: str
+
+    @model_validator(mode="after")
+    def _validate(self) -> "MemorySummary":
+        s = self.summary.strip()
+        if not s:
+            raise ValueError("summary must be non-empty")
+        self.summary = s[:4000]
+        return self
+
+
+def summarize_memory(
+    *,
+    previous_summary: str | None,
+    messages: list[dict[str, Any]],
+    run_id: str | None = None,
+    ui_debug: bool = False,
+) -> str | None:
+    role = os.getenv("V2_LLM_SUMMARY_ROLE") or "fast"
+    cfg = load_llm_config(role=role)
+    if cfg is None:
+        return None
+
+    llm = _build_llm(
+        api_key=cfg.api_key,
+        base_url=cfg.base_url,
+        model=cfg.model,
+        temperature=0.0,
+        timeout_s=cfg.timeout_s,
+    )
+
+    prev = (previous_summary or "").strip()
+    system_text = _load_prompt_asset("prompts/v2/memory_summary_system.md")
+    system = SystemMessage(content=system_text)
+
+    # Keep the input small and structured; do not leak tool outputs here.
+    chunks: list[str] = []
+    if prev:
+        chunks.append("previous_summary:")
+        chunks.append(prev)
+    chunks.append("messages_to_summarize:")
+    for m in messages[-32:]:
+        if not isinstance(m, dict):
+            continue
+        role2 = m.get("role")
+        text = m.get("text")
+        if role2 not in {"user", "assistant"}:
+            continue
+        if not isinstance(text, str):
+            continue
+        t = text.strip()
+        if not t:
+            continue
+        t = t if len(t) <= 500 else (t[:500] + "…")
+        chunks.append(f"{role2}: {t}")
+    human = HumanMessage(content="\n".join(chunks).strip())
+
+    structured = llm.with_structured_output(MemorySummary)
+
+    def invoke_structured() -> MemorySummary | None:
+        try:
+            result = structured.invoke(
+                [system, human],
+                config=_build_runnable_config(run_id=run_id, op="memory_summary", role=role),
+            )
+        except Exception as e:
+            if run_id:
+                trace_exception(run_id=run_id, ui_debug=ui_debug, where="summarize_memory.structured_invoke", exc=e)
+            return None
+        if isinstance(result, MemorySummary):
+            return result
+        return None
+
+    def invoke_json_fallback() -> str | None:
+        try:
+            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="memory_summary", role=role))
+        except Exception as e:
+            if run_id:
+                trace_exception(run_id=run_id, ui_debug=ui_debug, where="summarize_memory.json_invoke", exc=e)
+            return None
+        content = getattr(msg, "content", None)
+        if not isinstance(content, str):
+            return None
+        blob = _extract_json_object(content) or ""
+        if not blob:
+            return None
+        try:
+            payload = json.loads(blob)
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        summary = payload.get("summary")
+        if not isinstance(summary, str):
+            return None
+        s2 = summary.strip()
+        return s2[:4000] if s2 else None
+
+    out = invoke_structured()
+    if out is not None:
+        return out.summary
+    return invoke_json_fallback()

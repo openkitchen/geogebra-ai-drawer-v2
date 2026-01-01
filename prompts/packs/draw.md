@@ -2,7 +2,7 @@
 - 目标：最小可用、清晰可读、对象少。
 - 命名：A,B,C,...；辅助线 l,m; 圆 c1...；避免随机命名。
 - 少即是多：只有必要的点/线/圆；避免多余延长线与重复角。
-- 标签：关键点可用 Label/SetCaption；避免给所有对象都加标签。
+- 标签/可见性/样式由应用层 deterministic 处理；不要在 `commands` 里输出 `Label/SetCaption/SetLabelVisible/ShowAxes/ShowGrid` 等 UI/JS API 调用。
 - 角度：如需角弧，优先 `Angle(P,Q,R)`，尽量避免反射角；不必显示度数。
 - 不使用高阶构造（RegularPolygon/Square等）；先造点再造线。
 
@@ -23,5 +23,4 @@
 
 ### 示例：勾股定理（示意图默认）
 - `A=(0,0)` `B=(3,0)` `C=(0,4)` `TriangleABC=Polygon(A,B,C)`
-- 可选：直角标记（保持极简）：`angA=Angle(B,A,C)` + `SetLabelVisible(angA,false)` + `Text("直角",(0.2,0.2))`
-
+- 可选：直角标记（保持极简）：`angA=Angle(B,A,C)` + `Text("直角",(0.2,0.2))`（角度数值标签由应用层隐藏）

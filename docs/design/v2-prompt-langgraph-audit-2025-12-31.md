@@ -2,7 +2,13 @@
 
 日期：2025-12-31  
 范围：`apps/api/app/*`、`apps/web/src/*`（对照 v1 的 prompt/执行/修复优势，但本次聚焦 v2 是否“可替代 v1”）  
-结论：v2 的 **thread/run + SSE + interrupt/resume** 骨架已稳，但“教学画图产品”所需的 **命令生成可靠性、失败回滚与修复闭环、画布卫生/可读性兜底、场景化 prompt/playbook** 目前尚不完整，仍处于 POC→MVP 过渡阶段。
+结论（2025-12-31）：v2 的 **thread/run + SSE + interrupt/resume** 骨架已稳，但“教学画图产品”所需的 **命令生成可靠性、失败回滚与修复闭环、画布卫生/可读性兜底、场景化 prompt/playbook、多轮记忆** 当时尚不完整，仍处于 POC→MVP 过渡阶段。
+
+更新（2026-01-01）：已补齐到 MVP：
+- ✅ prompt/playbook 已接入（`prompts/v2/*` + `prompts/packs/*` + `prompts/scenarios/*` + `prompts/commandbook.json`）
+- ✅ plan_node（模型 plan → `plan_update`）
+- ✅ 多轮记忆（`memory_messages` + `memory_summary`，带 summarization）
+- ✅ 数值测量工具 `eval_numeric`（用于语义验证补强）
 
 ---
 
@@ -38,7 +44,7 @@
 （已修复到 MVP）
 - v2 graph 已落地：`generate (full commands) → exec → get_canvas_state → verify → (delete_objects rollback + runtime_feedback) → retry`。
 - 现阶段 verify 覆盖：退化（重复点/零面积/零长度）+ 关键对象类型缺失（如缺圆/缺三角形）。
-- 仍待增强：语义验证（角度/约束/退化更丰富）与可扩展的 measure 工具（见 todo）。
+- 仍待增强：语义验证（角度/约束/退化更丰富）与更可扩展的 measure 工具（已补齐最小 `eval_numeric`；见 todo）。
 
 ### 2.3 “画布卫生/可读性兜底”（deterministic allowed）— ❌
 （已修复到 MVP）
@@ -48,17 +54,13 @@
   - hideAngleValueLabels：隐藏角度数值标签（只留弧）
   - validateDiagram：角对象数量上限告警、角度标签仍可见告警
 
-### 2.4 v2 “prompt 系统”目前过于简化 — ⚠️
-- 现状（v2）：prompt 主要在 `apps/api/app/llm_decider.py` 的两段 SystemMessage：
-  1) `decide_next_step`：让模型决定 `tool` vs `final`，并在 `exec_geogebra_commands` 的 tool input 中直接产出 `commands`。  
-  2) `generate_final_answer`：让模型基于 `executed_commands/canvas_objects` 生成最终解释。
-- 缺口：
-  - 没有引入 v1 的 **file-based prompt packs/scenarios/constraints/commandbook**（见 `prompts/*`）；
-  - 对“GeoGebra 环境约束/白名单写法/常见报错替换”缺少系统性引导；
-  - 没有把“Child-first 教学表达模板”作为可复用资产（而不是散落在代码 prompt 里）。
-- 风险：模型会高频生成环境不支持或脆弱的命令，且缺少修复路径。
-
-补充：曾出现“解释幻觉”（画板里没有三角形，但最终文本声称画好了）。当前 v2 已把**绘图场景的最终输出改为 deterministic（严格基于画板对象）**，避免把事实一致性押注给 LLM。
+### 2.4 v2 “prompt 系统”目前过于简化 — ✅（已补齐到 MVP）
+- 现状（v2）：prompt 已收敛为 **file-based per-node prompts**（见 `docs/prompt-system.md`）：
+  - commands 生成：`prompts/v2/command_gen_system.md` + `prompts/geogebra-constraints.md` + `prompts/packs/{draw|repair}.md` + `prompts/scenarios/*.md` + `prompts/commandbook.json`
+  - final 文本：`prompts/v2/final_system.md`
+  - plan：`prompts/v2/plan_system.md`
+  - memory summarization：`prompts/v2/memory_summary_system.md`
+- 原则：保持“文字输出零包装”，自然语言由 LLM 自己生成（见 `docs/spec/prompt-contract.md`）。
 
 ### 2.5 工具 roster 与 schema 的“单一事实源”尚未形成 — ⚠️
 - 现状：
@@ -66,21 +68,23 @@
 - 风险：工具能力会“看似存在但永远用不到”，并在协作中制造误解；未来新增工具会更难对齐。
 - 结论：这是 **机制问题**，不是某个工具名的问题；需要明确“单一事实源”（例如以 `protocol_v2.py` + `/api/schema/v2` 为锚点）并在自测/CI 中持续校验对齐。
 
-### 2.6 多轮“记忆/偏好”在 v2 里还不完整 — ⚠️
-- 现状：GraphState 持久化了最近 `tool_results`，但没有明确的：
-  - 多轮对话 history（用户偏好、上一轮要求）
-  - 可控的 summarization/压缩策略
-  - “编辑意图”（删/改/重画）识别与安全动作边界
-- 风险：满足不了 `docs/self-test.md` 里的多轮用例（B1/B2），也难以靠 prompt 解决“稳定复用对象、稳定命名”。
+### 2.6 多轮“记忆/偏好”在 v2 里还不完整 — ✅（已补齐到 MVP）
+- 已实现：
+  - `memory_messages`：最近多轮 user/assistant 消息
+  - `memory_summary`：超出阈值时自动 summarization（可配置阈值）
+- 仍待增强（P1）：编辑意图（删/改/重画/复用对象）策略与更结构化的偏好持久化。
 
 ---
 
 ## 3) LangGraph 设计评估（v2）
 
-### 3.1 结构现状
-- 当前 graph 只有：
-  - `act_node`：决定下一步（tool/final）  
-  - `frontend_tool_node`：发出 interrupt，等待 resume，再把 resume 结果 append 到 `tool_results`
+### 3.1 结构现状（2026-01-01）
+- 当前 graph 节点：
+  - `ingest_node`：新用户轮次入口（重置 per-run 状态 + 记忆 summarization）
+  - `plan_node`：生成内部 plan（UI 折叠展示）
+  - `act_node`：主循环（command-gen → exec → refresh → verify → repair）
+  - `finalize_node`：把最终答案写入多轮记忆
+  - `frontend_tool_node`：发出 interrupt，等待 resume，并把结果写入 `tool_results`
 （见 `apps/api/app/runtime_graph.py`）
 
 ### 3.2 与 `docs/spec/langgraph-orchestration.md` 的差距

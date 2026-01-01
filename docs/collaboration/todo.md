@@ -33,10 +33,10 @@
 | 123 | P0 v2：verify + repair loop（硬失败 + 语义失败） | codex-A | done | 122 | 2026-01-01 | verify 覆盖退化 + 关键对象缺失 +（新增）内接/直角三角形的坐标语义校验；语义失败直接 `delete_objects` 回滚再重试；tool_calls_limit=12；预算耗尽时绘图场景 final 保持 deterministic；`python scripts/v2_smoke_test.py --force-repair-once` ✅ |
 | 124 | P0 v2：画布卫生/可读性兜底（几何 preset + 标签/角度展示 + 质量校验） | codex-A | done | 105,106 | 2025-12-31 | geometry preset 隐藏轴/网格；showKeyLabels；hideAngleValueLabels；validateDiagram 告警通过 tool output 回传 |
 | 125 | P0 v2：工具 roster 单一事实源 + 对齐校验（schema/前端/后端/文档） | codex-A | done | 113 | 2025-12-31 | schema 增补 delete_objects 与 exec 输出字段；同步 `docs/spec/langgraph-orchestration.md`、`docs/self-test.md` |
-| 126 | P1 v2：prompt/playbook 资产化（packs/scenarios/constraints/commandbook 注入） | codex-A | backlog | 123 | 2025-12-31 | 已做最小注入（commandbook/constraints→command-gen）；待补：packs/scenarios 选择机制与覆盖 MVP 题型 |
-| 127 | P1 v2：多轮记忆/偏好（history + summarization 策略） | codex-A | backlog | 123 | 2025-12-31 | 让 v2 通过可控的 history/摘要保持上下文与偏好（B1/B2）；限制状态体积 |
+| 126 | P1 v2：prompt/playbook 资产化（packs/scenarios/constraints/commandbook 注入） | codex-A | done | 123 | 2026-01-01 | 已接入：`prompts/v2/*` + `prompts/packs/*` + `prompts/scenarios/*` + `prompts/commandbook.json`；command-gen/final/plan/memory 均 file-based |
+| 127 | P1 v2：多轮记忆/偏好（history + summarization 策略） | codex-A | done | 123 | 2026-01-01 | GraphState 增加 `memory_messages` + `memory_summary`；超阈值自动 summarization（`V2_MEMORY_*` 可配）；LLM 调用注入 memory context |
 | 128 | P1 v2：编辑意图与安全边界（删/改/重画/复用对象策略） | codex-A | backlog | 127 | 2025-12-31 | 明确 edit intent + 安全动作边界（Child-first） |
-| 134 | P1 v2：Plan 可见（模型 plan → plan_update 事件） | codex-A | backlog | 123 | 2025-12-31 | 在 graph 增加 plan_node：模型产出结构化 todo 写入 state；SSE 发 plan_update（真实内容） |
+| 134 | P1 v2：Plan 可见（模型 plan → plan_update 事件） | codex-A | done | 123 | 2026-01-01 | graph 增加 `plan_node`；SSE 输出真实 `plan_update`；UI 时间线展示 plan（可折叠） |
 | 135 | v2：文档/入口收敛（标记 v1 legacy） | codex-A | done | - | 2026-01-01 | root `README.md` 增加 v2 Quickstart；root `package.json` 增加 `npm run dev:v2`；v2 Web 默认端口 3000（见 `apps/web/vite.config.ts` 与 `docs/self-test.md`） |
 | 136 | v2：协议类型单一事实源（/api/schema/v2 → TS） | codex-B | backlog | 125 | 2025-12-31 | 以 `GET /api/schema/v2` 为事实源生成/校验 TS types（替代手写 `RunStreamEvent`）；加 CI/脚本防漂移 |
 | 137 | v2：工具注册表收敛（supported_tools + 严格校验） | codex-A | backlog | 125 | 2025-12-31 | server 输出 supported_tools；UI 收到未知 tool fail-fast；明确 `eval_expression` 的正式定位 |
@@ -44,4 +44,4 @@
 | 139 | v2：Web run loop 拆分（hook + timeline renderer） | codex-B | backlog | 136 | 2025-12-31 | 拆分 `apps/web/src/App.tsx`：SSE consume、interrupt loop、timeline 渲染解耦 |
 | 140 | v2：状态/预算计数单一来源（避免 RunState/GraphState 双写） | codex-A | backlog | 138 | 2025-12-31 | 明确 source-of-truth（优先 GraphState）；API 层只读 snapshot 映射 budget/plan |
 | 141 | v2：持久化 checkpointer 方案评审（PostgresSaver） | wei | backlog | 104 | 2025-12-31 | 输出迁移设计（配置、回放/恢复、自测、成本）并待拍板 |
-| 142 | P1 v2：数值测量工具（measure_expression / eval_numeric） | codex-A | backlog | 125 | 2025-12-31 | 为语义验证（角度/距离/约束）补齐“可读数值”的 tool（避免只靠 valueString/启发式） |
+| 142 | P1 v2：数值测量工具（measure_expression / eval_numeric） | codex-A | done | 125 | 2026-01-01 | 新增 `eval_numeric`（multi-expressions）并接入前端工具；用于补强三角形语义验证（必要时先测再判定） |

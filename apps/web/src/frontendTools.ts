@@ -208,6 +208,84 @@ function evalExpression(input: unknown, api: GeoGebraAppletApi): unknown {
   return { ok, labels, dialogs: dialogs.length ? dialogs : null };
 }
 
+function parseFirstNumber(valueString: unknown): number | null {
+  if (typeof valueString !== 'string') return null;
+  const s = valueString.trim();
+  if (!s) return null;
+  const cleaned = s.replaceAll('°', '').replaceAll('deg', '').replaceAll('rad', '');
+  const m = cleaned.match(/[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function evalNumeric(input: unknown, api: GeoGebraAppletApi): unknown {
+  if (!input || typeof input !== 'object') throw new Error('Missing input');
+  const expressionsRaw = (input as AnyRecord).expressions;
+  if (!Array.isArray(expressionsRaw)) throw new Error('Missing input.expressions');
+  const expressions = expressionsRaw
+    .filter((e): e is string => typeof e === 'string')
+    .map((e) => e.trim())
+    .filter((e) => e.length > 0);
+  if (!expressions.length) throw new Error('Missing input.expressions');
+
+  const dialogs: string[] = [];
+  const results = expressions.slice(0, 24).map((expression) => {
+    // Drain dialogs before each expression to avoid blocking.
+    for (let i = 0; i < 8; i++) {
+      const drained = consumeGeoGebraDialogs();
+      if (!drained.length) break;
+      dialogs.push(...drained);
+    }
+
+    if (expression.includes('=')) {
+      return {
+        expression,
+        ok: false,
+        value: null,
+        value_string: null,
+        temp_label: null,
+        error: { message: 'eval_numeric expressions must not contain "=" (no side effects)' },
+      };
+    }
+
+    const tempLabel = `__m_${crypto.randomUUID().replaceAll('-', '').slice(0, 10)}`;
+    const okValue = safe(() => api.evalCommand(`${tempLabel} = ${expression}`));
+    const ok = okValue === true;
+    const valueString = ok ? safe(() => api.getValueString(tempLabel)) : null;
+    const valueFromApi = ok ? safe(() => (api as any).getValue?.(tempLabel)) : null;
+    const value =
+      typeof valueFromApi === 'number' && Number.isFinite(valueFromApi) ? valueFromApi : parseFirstNumber(valueString);
+
+    if (ok) safe(() => api.deleteObject(tempLabel));
+
+    for (let i = 0; i < 8; i++) {
+      const drained = consumeGeoGebraDialogs();
+      if (!drained.length) break;
+      dialogs.push(...drained);
+    }
+
+    const errorString = safe(() => (api as any).getErrorString?.()) as unknown;
+    const error =
+      ok
+        ? null
+        : typeof errorString === 'string' && errorString.trim()
+          ? { message: errorString.trim() }
+          : { message: 'Expression failed' };
+
+    return {
+      expression,
+      ok,
+      value: value ?? null,
+      value_string: typeof valueString === 'string' && valueString.trim() ? valueString.trim() : null,
+      temp_label: tempLabel,
+      error,
+    };
+  });
+
+  return { results, dialogs: dialogs.length ? dialogs : null };
+}
+
 function execGeogebraCommands(input: unknown, api: GeoGebraAppletApi): unknown {
   if (!input || typeof input !== 'object') throw new Error('Missing input');
   const commands = (input as AnyRecord).commands;
@@ -349,6 +427,10 @@ export async function runFrontendTool(args: {
 
     if (args.toolName === 'eval_expression') {
       return { ok: true, output: evalExpression(args.input, api) };
+    }
+
+    if (args.toolName === 'eval_numeric') {
+      return { ok: true, output: evalNumeric(args.input, api) };
     }
 
     if (args.toolName === 'exec_geogebra_commands') {

@@ -50,6 +50,24 @@ class EvalExpressionOutput(BaseModel):
     dialogs: list[str] | None = None
 
 
+class EvalNumericInput(BaseModel):
+    expressions: list[str] = Field(..., min_length=1)
+
+
+class EvalNumericResult(BaseModel):
+    expression: str
+    ok: bool
+    value: float | None = None
+    value_string: str | None = None
+    temp_label: str | None = None
+    error: Any = None
+
+
+class EvalNumericOutput(BaseModel):
+    results: list[EvalNumericResult] = Field(default_factory=list)
+    dialogs: list[str] | None = None
+
+
 class ExecGeogebraCommandsInput(BaseModel):
     commands: list[str] = Field(..., min_length=1)
 
@@ -239,6 +257,8 @@ def get_protocol_schema_v2() -> dict[str, Any]:
             "GetCanvasStateOutput": GetCanvasStateOutput.model_json_schema(),
             "EvalExpressionInput": EvalExpressionInput.model_json_schema(),
             "EvalExpressionOutput": EvalExpressionOutput.model_json_schema(),
+            "EvalNumericInput": EvalNumericInput.model_json_schema(),
+            "EvalNumericOutput": EvalNumericOutput.model_json_schema(),
             "ExecGeogebraCommandsInput": ExecGeogebraCommandsInput.model_json_schema(),
             "ExecGeogebraCommandsOutput": ExecGeogebraCommandsOutput.model_json_schema(),
             "DeleteObjectsInput": DeleteObjectsInput.model_json_schema(),

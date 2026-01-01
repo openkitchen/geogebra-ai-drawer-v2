@@ -51,7 +51,7 @@ class RunInput(BaseModel):
 class UIContext(BaseModel):
     locale: str = "zh-CN"
     debug: bool = False
-    plan_mode: bool = False
+    plan_mode: bool = True
 
 
 class RunStreamRequest(BaseModel):
@@ -86,19 +86,6 @@ def _to_jsonable(value: Any) -> Any:
 
 def _sse(event: str, data: Any) -> dict:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
-
-
-def _plan_items(tool_calls_used: int) -> list[dict[str, Any]]:
-    done1 = tool_calls_used >= 1
-    done2 = tool_calls_used >= 2
-    done3 = tool_calls_used >= 3
-    return [
-        {"id": "p1", "text": "Read user_text", "done": True},
-        {"id": "p2", "text": "Tool 1: get_canvas_state", "done": done1},
-        {"id": "p3", "text": "Tool 2: exec_geogebra_commands (optional)", "done": done2},
-        {"id": "p4", "text": "Tool 3: get_canvas_state (optional)", "done": done3},
-        {"id": "p5", "text": "Finish answer", "done": False},
-    ]
 
 
 @app.get("/healthz")
@@ -250,13 +237,8 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
         trace_sse(run_id=run_id, ui_debug=ui_debug, event="budget", data=budget_payload)
         yield _sse("budget", budget_payload)
 
-        trace_sse(run_id=run_id, ui_debug=ui_debug, event="node_start", data={"name": "act_node"})
-        yield _sse("node_start", {"name": "act_node"})
-
-        # Simulate incremental progress so UI can see streaming.
-        plan_payload = {"plan": _plan_items(run.tool_calls_used)}
-        trace_sse(run_id=run_id, ui_debug=ui_debug, event="plan_update", data=plan_payload)
-        yield _sse("plan_update", plan_payload)
+        trace_sse(run_id=run_id, ui_debug=ui_debug, event="node_start", data={"name": "ingest_node"})
+        yield _sse("node_start", {"name": "ingest_node"})
 
         await asyncio.sleep(0.05)
         token_payload = {"text_delta": "（v2 llm）准备开始…" if llm_enabled else "（v2 stub）准备开始…"}
@@ -268,6 +250,7 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
         input_state = {
             "run_id": run_id,
             "ui_debug": ui_debug,
+            "plan_mode": bool(body.ui_context.plan_mode),
             "user_text": body.input.user_text,
             "tool_calls_used": run.tool_calls_used,
             "tool_calls_limit": run.tool_calls_limit,
@@ -278,6 +261,7 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
         answer_text: Optional[str] = None
         try:
             interrupts_seen = False
+            plan_sent = False
             for chunk in graph.stream(input_state, config):
                 interrupts = chunk.get("__interrupt__")
                 if interrupts and not interrupts_seen:
@@ -288,9 +272,19 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
                     continue
                 if interrupts_seen:
                     continue
+                for node_name in ("ingest_node", "plan_node", "act_node", "finalize_node"):
+                    node_out = chunk.get(node_name)
+                    if not isinstance(node_out, dict):
+                        continue
 
-                node_out = chunk.get("act_node")
-                if isinstance(node_out, dict):
+                    if node_name == "plan_node" and not plan_sent:
+                        plan = node_out.get("plan")
+                        if isinstance(plan, list) and plan:
+                            plan_payload = {"plan": plan}
+                            trace_sse(run_id=run_id, ui_debug=ui_debug, event="plan_update", data=plan_payload)
+                            yield _sse("plan_update", plan_payload)
+                            plan_sent = True
+
                     if "model_calls_used" in node_out:
                         try:
                             run.model_calls_used = int(node_out["model_calls_used"])
@@ -451,10 +445,6 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
         trace_sse(run_id=run_id, ui_debug=ui_debug, event="budget", data=budget_payload)
         yield _sse("budget", budget_payload)
 
-        plan_payload = {"plan": _plan_items(run.tool_calls_used)}
-        trace_sse(run_id=run_id, ui_debug=ui_debug, event="plan_update", data=plan_payload)
-        yield _sse("plan_update", plan_payload)
-
         token_payload = {"text_delta": "（v2 llm）已收到工具结果，继续…" if llm_enabled else "（v2 stub）已收到工具结果，继续…"}
         trace_sse(run_id=run_id, ui_debug=ui_debug, event="token", data=token_payload)
         yield _sse("token", token_payload)
@@ -476,8 +466,10 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
                 if interrupts_seen:
                     continue
 
-                node_out = chunk.get("act_node")
-                if isinstance(node_out, dict):
+                for node_name in ("act_node", "finalize_node"):
+                    node_out = chunk.get(node_name)
+                    if not isinstance(node_out, dict):
+                        continue
                     if "model_calls_used" in node_out:
                         try:
                             run.model_calls_used = int(node_out["model_calls_used"])

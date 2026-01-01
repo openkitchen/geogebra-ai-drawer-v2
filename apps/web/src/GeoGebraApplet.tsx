@@ -63,12 +63,14 @@ export function GeoGebraApplet({ className, onAppletReady }: GeoGebraAppletProps
           id: appletId,
           appName: 'classic',
           showToolBar: true,
-          showMenuBar: true,
-          showAlgebraInput: true,
+          showMenuBar: false,
+          showAlgebraInput: false,
           showResetIcon: true,
           enableShiftDragZoom: true,
           allowUpscale: true,
           scaleContainerClass: 'ggb-host',
+          autoHeight: true,
+          scale: 0.8,
           appletOnLoad: (api) => {
             if (cancelled) return;
             setStatus('ready');
