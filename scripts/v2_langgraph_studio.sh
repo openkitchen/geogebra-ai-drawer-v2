@@ -45,8 +45,15 @@ cd "$API_DIR"
 
 # We intentionally run the CLI via `uv tool run` so you don't need to add langgraph-cli to project deps.
 # Use the [inmem] extra to avoid requiring external infrastructure for local dev.
+if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+  exec uv tool run --from "langgraph-cli[inmem]" langgraph dev \
+    --config "$CONFIG_PATH" \
+    --host "$HOST" \
+    --port "$PORT" \
+    "${EXTRA_ARGS[@]}"
+fi
+
 exec uv tool run --from "langgraph-cli[inmem]" langgraph dev \
   --config "$CONFIG_PATH" \
   --host "$HOST" \
-  --port "$PORT" \
-  "${EXTRA_ARGS[@]}"
+  --port "$PORT"

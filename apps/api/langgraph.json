@@ -1,6 +1,8 @@
 {
   "$schema": "https://langgra.ph/schema.json",
-  "dependencies": ["."],
+  "dependencies": [
+    "."
+  ],
   "graphs": {
     "geogebra_v2": "app.runtime_graph:graph"
   },
