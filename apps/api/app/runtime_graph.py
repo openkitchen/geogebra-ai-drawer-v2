@@ -72,51 +72,6 @@ def _wants_triangle(user_text: str) -> bool:
     return ("三角形" in user_text) or ("triangle" in lowered)
 
 
-def _seems_asking_about_canvas(user_text: str) -> bool:
-    lowered = user_text.lower()
-    if "canvas" in lowered or "diagram" in lowered:
-        return True
-    return any(
-        k in user_text
-        for k in [
-            "画板",
-            "图里",
-            "图中",
-            "这张图",
-            "这个图",
-            "这幅图",
-            "当前图",
-            "现在图",
-        ]
-    )
-
-
-def _canvas_summary_text(state: GraphState) -> str:
-    tool_results = state.get("tool_results", [])
-    for entry in reversed(tool_results):
-        if entry.get("tool_name") != "get_canvas_state":
-            continue
-        resume = entry.get("resume")
-        if not isinstance(resume, dict):
-            continue
-        output = resume.get("output")
-        if not isinstance(output, dict):
-            continue
-        objects = output.get("objects")
-        if not isinstance(objects, list):
-            continue
-
-        names: list[str] = []
-        for obj in objects[:5]:
-            if isinstance(obj, dict) and isinstance(obj.get("name"), str):
-                names.append(obj["name"])
-        if names:
-            return f"我看到画板上现在有 {len(objects)} 个对象（例如：{', '.join(names)}）。"
-        return f"我看到画板上现在有 {len(objects)} 个对象。"
-
-    return "我暂时还拿不到画板对象列表。"
-
-
 def _llm_unavailable_text(state: GraphState) -> str:
     run_id = state.get("run_id") or ""
     if state.get("ui_debug") and run_id:
@@ -129,15 +84,7 @@ def _llm_unavailable_text(state: GraphState) -> str:
 
 
 def _fallback_text_without_llm(state: GraphState) -> str:
-    user_text = state.get("user_text") or ""
-    if _seems_asking_about_canvas(user_text):
-        return _canvas_summary_text(state)
     return _llm_unavailable_text(state)
-
-
-def _looks_like_stub_summary(text: str) -> bool:
-    s = (text or "").strip()
-    return s.startswith("我看到画板上现在有") or s.startswith("我暂时还拿不到画板对象列表")
 
 
 def _extract_latest_canvas_objects(state: GraphState) -> list[dict[str, Any]]:
@@ -166,17 +113,6 @@ def _count_object_types(objects: list[dict[str, Any]]) -> dict[str, int]:
         key = typ.strip().lower()
         counts[key] = counts.get(key, 0) + 1
     return counts
-
-
-def _extract_first_name(objects: list[dict[str, Any]], *, type_name: str) -> str | None:
-    want = type_name.strip().lower()
-    for obj in objects:
-        typ = obj.get("type")
-        if isinstance(typ, str) and typ.strip().lower() == want:
-            name = obj.get("name")
-            if isinstance(name, str) and name.strip():
-                return name.strip()
-    return None
 
 
 def _extract_triangle_vertices(objects: list[dict[str, Any]]) -> list[str]:
@@ -210,47 +146,6 @@ def _extract_triangle_vertices(objects: list[dict[str, Any]]) -> list[str]:
         if t in point_names and t not in uniq:
             uniq.append(t)
     return uniq[:3]
-
-
-def _render_drawing_answer(state: GraphState) -> str:
-    user_text = state.get("user_text") or ""
-    objects = _extract_latest_canvas_objects(state)
-    circle = _extract_first_name(objects, type_name="circle")
-    triangle = _extract_first_name(objects, type_name="triangle") or _extract_first_name(objects, type_name="polygon")
-    vertices = _extract_triangle_vertices(objects)
-
-    lines: list[str] = []
-    lines.append("我已经把图画在画板上了。")
-
-    drawn: list[str] = []
-    if circle:
-        drawn.append(f"圆：{circle}")
-    if triangle:
-        tri_text = f"三角形：{triangle}"
-        if len(vertices) == 3:
-            tri_text += f"（顶点 {vertices[0]},{vertices[1]},{vertices[2]}）"
-        drawn.append(tri_text)
-
-    if drawn:
-        lines.append("我画出了：")
-        for item in drawn[:4]:
-            lines.append(f"- {item}")
-
-    lines.append("作图过程（回顾）：")
-    steps: list[str] = []
-    if circle:
-        steps.append("先确定圆心和半径（或圆上一点），画出这个圆。")
-    if triangle:
-        steps.append("再取 3 个不重合的点，并把它们连起来得到三角形。")
-    if ("直角" in user_text or "right" in user_text.lower()) and circle and triangle:
-        steps.append("让三角形满足“直角”条件：常用做法是先确定一条直径，再取圆上第三点（直径所对的圆周角是直角）。")
-
-    if steps:
-        for i, step in enumerate(steps, start=1):
-            lines.append(f"{i}) {step}")
-
-    lines.append("如果你想我把关键点标成 A、B、C 并把直角标出来，我也可以继续帮你完善。")
-    return "\n".join(lines).strip()
 
 
 _POINT_RE = re.compile(
@@ -602,9 +497,28 @@ def act_node(state: GraphState) -> dict:
 
             ok, _issues = _verify_canvas(state)
             if ok and state.get("did_draw") is True:
+                can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
+                if can_use_llm:
+                    model_calls_used += 1
+                    answer = generate_final_answer(
+                        user_text=user_text,
+                        tool_calls_used=tool_calls_used,
+                        tool_calls_limit=tool_calls_limit,
+                        tool_results=state.get("tool_results"),
+                        run_id=run_id,
+                        ui_debug=ui_debug,
+                    )
+                    if answer:
+                        return {
+                            "next_step_kind": "final",
+                            "answer_text": answer,
+                            "model_calls_used": model_calls_used,
+                            "model_calls_limit": model_calls_limit,
+                        }
+
                 return {
                     "next_step_kind": "final",
-                    "answer_text": _render_drawing_answer(state),
+                    "answer_text": "图已经画在画板上了，但我这次没能生成文字说明。你可以稍后重试。",
                     "model_calls_used": model_calls_used,
                     "model_calls_limit": model_calls_limit,
                 }
@@ -787,11 +701,30 @@ def act_node(state: GraphState) -> dict:
 
         ok, issues = _verify_canvas(state)
         if ok:
-            answer_text = _render_drawing_answer(state)
+            can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
+            if can_use_llm:
+                model_calls_used += 1
+                answer = generate_final_answer(
+                    user_text=user_text,
+                    tool_calls_used=tool_calls_used,
+                    tool_calls_limit=tool_calls_limit,
+                    tool_results=state.get("tool_results"),
+                    run_id=run_id,
+                    ui_debug=ui_debug,
+                )
+                if answer:
+                    return {
+                        "last_verify_issues": [],
+                        "next_step_kind": "final",
+                        "answer_text": answer,
+                        "model_calls_used": model_calls_used,
+                        "model_calls_limit": model_calls_limit,
+                    }
+
             return {
                 "last_verify_issues": [],
                 "next_step_kind": "final",
-                "answer_text": answer_text,
+                "answer_text": "图已经画在画板上了，但我这次没能生成文字说明。你可以稍后重试。",
                 "model_calls_used": model_calls_used,
                 "model_calls_limit": model_calls_limit,
             }

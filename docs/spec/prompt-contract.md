@@ -6,6 +6,11 @@ LLM 输出 JSON：
 - `commands`: string[]，可执行的 GeoGebra 命令序列（或单个字符串也视为 1 条命令，但推荐数组）。
 - `overlayText`（可选）：`{ corner, text }`，用于在画布四角显示固定提示文字（UI overlay，不随画布移动）。
 
+### 文字输出零包装（原则）
+- `explanation` 作为**最终面向用户**的自然语言说明，应由 **LLM 直接生成**。
+- 服务端/前端 **不得**基于 `commands` / `canvasState` / `executed_commands` 去“拼装/修饰/翻译”说明文本（例如硬编码“我画出了… / 作图过程回顾…”）。
+- 服务端/前端允许包装与展示的内容仅限于：**结构化动作闭环**（tool calls / commands 的请求与结果）、运行状态与错误提示（budget、run_id、失败原因列表等）。
+
 ### Tool / Commands 边界（重要）
 - `commands` **只能**包含 GeoGebra 命令；**禁止**把 tool 名（如 `get_canvas_state()` / `set_corner_text(...)` / `ggb_response(...)`）混进 `commands`。
 
