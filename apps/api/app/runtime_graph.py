@@ -32,6 +32,7 @@ class GraphState(TypedDict, total=False):
     last_exec_created_objects: list[str]
     last_exec_had_failure: bool
     last_exec_dialogs: list[str]
+    last_verify_issues: list[str]
     next_step_kind: Literal["tool", "final"]
     next_tool_name: str
     next_tool_call_id: str
@@ -302,6 +303,64 @@ def _is_right_triangle(a: tuple[float, float], b: tuple[float, float], c: tuple[
     return abs((sides[0] + sides[1]) - sides[2]) <= max(1e-6, 1e-3 * sides[2])
 
 
+def _triangle_kind(a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]) -> str:
+    def d2(p: tuple[float, float], q: tuple[float, float]) -> float:
+        dx = p[0] - q[0]
+        dy = p[1] - q[1]
+        return dx * dx + dy * dy
+
+    ab = d2(a, b)
+    bc = d2(b, c)
+    ca = d2(c, a)
+    sides = sorted([ab, bc, ca])
+    if sides[0] <= 1e-12:
+        return "degenerate"
+
+    tol = max(1e-6, 1e-3 * sides[2])
+    if abs((sides[0] + sides[1]) - sides[2]) <= tol:
+        return "right"
+    if (sides[0] + sides[1]) < (sides[2] - tol):
+        return "obtuse"
+    return "acute"
+
+
+def _list_triangle_candidates(objects: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    coords = _extract_point_coords(objects)
+    center = coords.get("O")
+
+    candidates: list[dict[str, Any]] = []
+    for obj in objects:
+        typ = obj.get("type")
+        if not (isinstance(typ, str) and typ.strip().lower() in {"triangle", "polygon"}):
+            continue
+
+        name = obj.get("name")
+        name_s = name.strip() if isinstance(name, str) else ""
+        vertices = _extract_triangle_vertices([obj] + objects)
+        if len(vertices) != 3:
+            continue
+
+        if not all(v in coords for v in vertices):
+            candidates.append({"name": name_s, "vertices": vertices, "kind": "unknown", "inscribed_ok": None})
+            continue
+
+        a, b, c = (coords[vertices[0]], coords[vertices[1]], coords[vertices[2]])
+        kind = _triangle_kind(a, b, c)
+
+        inscribed_ok: bool | None = None
+        if center is not None:
+            dists = [math.dist(center, coords[v]) for v in vertices]
+            if min(dists) <= 1e-6:
+                inscribed_ok = False
+            else:
+                spread = max(dists) - min(dists)
+                inscribed_ok = spread <= max(1e-6, 1e-3 * max(dists))
+
+        candidates.append({"name": name_s, "vertices": vertices, "kind": kind, "inscribed_ok": inscribed_ok})
+
+    return candidates
+
+
 def _verify_canvas(state: GraphState) -> tuple[bool, list[str]]:
     issues: list[str] = []
     user_text = state.get("user_text") or ""
@@ -324,27 +383,43 @@ def _verify_canvas(state: GraphState) -> tuple[bool, list[str]]:
         issues.append("missing_triangle")
 
     # Semantic checks (best-effort, deterministic) for common geometry requests.
-    # - "内接" (inscribed): triangle vertices should lie on the circle (same center-distance).
-    # - "直角": triangle should satisfy Pythagorean theorem under parsed coordinates.
     lowered = user_text.lower()
     wants_right = ("直角" in user_text) or ("right" in lowered)
+    wants_obtuse = ("钝角" in user_text) or ("obtuse" in lowered)
     wants_inscribed = "内接" in user_text
-    if wants_inscribed and _wants_circle(user_text) and _wants_triangle(user_text):
-        coords = _extract_point_coords(objects)
-        center = coords.get("O")
-        vertices = _extract_triangle_vertices(objects)
-        if center is not None and len(vertices) == 3 and all(v in coords for v in vertices):
-            dists = [math.dist(center, coords[v]) for v in vertices]
-            if min(dists) <= 1e-6:
-                issues.append("inscribed_triangle:vertex_at_center")
-            else:
-                spread = max(dists) - min(dists)
-                if spread > max(1e-6, 1e-3 * max(dists)):
-                    issues.append("inscribed_triangle:vertices_not_on_same_circle")
-            if wants_right:
-                a, b, c = (coords[vertices[0]], coords[vertices[1]], coords[vertices[2]])
-                if not _is_right_triangle(a, b, c):
-                    issues.append("right_triangle:pythagorean_failed")
+
+    triangles = _list_triangle_candidates(objects)
+
+    def ok_inscribed(t: dict[str, Any]) -> bool:
+        if not wants_inscribed:
+            return True
+        v = t.get("inscribed_ok")
+        return v is not False  # True or None(unknown) are acceptable for MVP.
+
+    if wants_right and wants_obtuse:
+        if len(triangles) < 2:
+            issues.append("need_two_triangles")
+        has_right = any(t.get("kind") == "right" and ok_inscribed(t) for t in triangles)
+        has_obtuse = any(t.get("kind") == "obtuse" and ok_inscribed(t) for t in triangles)
+        if not has_right:
+            issues.append("missing_right_triangle")
+        if not has_obtuse:
+            issues.append("missing_obtuse_triangle")
+    else:
+        if wants_right:
+            has_right = any(t.get("kind") == "right" and ok_inscribed(t) for t in triangles)
+            if not has_right:
+                issues.append("missing_right_triangle")
+        if wants_obtuse:
+            has_obtuse = any(t.get("kind") == "obtuse" and ok_inscribed(t) for t in triangles)
+            if not has_obtuse:
+                issues.append("missing_obtuse_triangle")
+
+    # If "内接" is requested, make sure at least one triangle seems inscribed (when we can verify).
+    if wants_inscribed and triangles:
+        known = [t for t in triangles if t.get("inscribed_ok") is not None]
+        if known and not any(t.get("inscribed_ok") is True for t in known):
+            issues.append("inscribed_triangle:vertices_not_on_same_circle")
 
     return (len(issues) == 0), issues
 
@@ -382,6 +457,54 @@ def _build_runtime_feedback(state: GraphState, issues: list[str]) -> str:
 
     lines.append("IMPORTANT: Re-generate a COMPLETE command list for the original user request (not a patch).")
     lines.append("Avoid degenerate geometry (duplicate points / zero-length segments / zero-area polygons).")
+
+    return "\n".join(lines).strip()
+
+
+def _summarize_last_delete(state: GraphState) -> str | None:
+    tool_results = state.get("tool_results", [])
+    if not isinstance(tool_results, list):
+        return None
+
+    for entry in reversed(tool_results):
+        if entry.get("tool_name") != "delete_objects":
+            continue
+        resume = entry.get("resume")
+        if not isinstance(resume, dict):
+            return None
+        output = resume.get("output")
+        if not isinstance(output, dict):
+            return None
+        deleted = output.get("deleted_objects")
+        failed = output.get("failed_objects")
+        deleted_n = len(deleted) if isinstance(deleted, list) else 0
+        failed_n = len(failed) if isinstance(failed, list) else 0
+        return f"cleanup(delete_objects): deleted={deleted_n} failed={failed_n}"
+
+    return None
+
+
+def _render_draw_failure_answer(state: GraphState) -> str:
+    # Child-first UX by default; include debug details only when ui_debug is enabled.
+    base = "我这次没能把图形画对，但我已经把画板清理干净了。你可以再发一次同样的需求，我会换一种更稳的作图方法。"
+    if not bool(state.get("ui_debug")):
+        return base
+
+    lines: list[str] = [base]
+    issues = state.get("last_verify_issues")
+    if isinstance(issues, list) and issues:
+        lines.append("")
+        lines.append("失败原因（调试信息）：")
+        for issue in [x for x in issues if isinstance(x, str) and x.strip()][:8]:
+            lines.append(f"- {issue.strip()}")
+
+    cleanup = _summarize_last_delete(state)
+    if cleanup:
+        lines.append(f"- {cleanup}")
+
+    run_id = (state.get("run_id") or "").strip()
+    if run_id:
+        lines.append(f"- run_id: {run_id}")
 
     return "\n".join(lines).strip()
 
@@ -463,7 +586,7 @@ def act_node(state: GraphState) -> dict:
                 return {
                     "give_up_after_cleanup": False,
                     "next_step_kind": "final",
-                    "answer_text": "我这次没能把图形画对，但我已经把画板清理干净了。你可以再发一次同样的需求，我会换一种更稳的作图方法。",
+                    "answer_text": _render_draw_failure_answer(state),
                     "model_calls_used": model_calls_used,
                     "model_calls_limit": model_calls_limit,
                 }
@@ -561,7 +684,7 @@ def act_node(state: GraphState) -> dict:
         return {
             "give_up_after_cleanup": False,
             "next_step_kind": "final",
-            "answer_text": "我这次没能把图形画对，但我已经把画板清理干净了。你可以再发一次同样的需求，我会换一种更稳的作图方法。",
+            "answer_text": _render_draw_failure_answer(state),
             "model_calls_used": model_calls_used,
             "model_calls_limit": model_calls_limit,
         }
@@ -666,6 +789,7 @@ def act_node(state: GraphState) -> dict:
         if ok:
             answer_text = _render_drawing_answer(state)
             return {
+                "last_verify_issues": [],
                 "next_step_kind": "final",
                 "answer_text": answer_text,
                 "model_calls_used": model_calls_used,
@@ -678,6 +802,7 @@ def act_node(state: GraphState) -> dict:
         objects = [x for x in created if isinstance(x, str) and x.strip()]
         if attempt < max_attempts and remaining >= 4 and objects:
             return {
+                "last_verify_issues": issues,
                 "repair_feedback": feedback,
                 "regen_needed": True,
                 "give_up_after_cleanup": False,
@@ -693,6 +818,7 @@ def act_node(state: GraphState) -> dict:
         # No more attempts/budget: try to keep canvas clean if possible, then finish.
         if remaining >= 1 and objects:
             return {
+                "last_verify_issues": issues,
                 "repair_feedback": feedback,
                 "regen_needed": False,
                 "give_up_after_cleanup": True,
@@ -706,6 +832,7 @@ def act_node(state: GraphState) -> dict:
             }
 
         return {
+            "last_verify_issues": issues,
             "next_step_kind": "final",
             "answer_text": "我这次没能把图形画对（已记录排障信息）。你可以再发一次同样的需求，我会换一种更稳的作图方法。",
             "model_calls_used": model_calls_used,

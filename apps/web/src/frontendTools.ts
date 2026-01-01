@@ -255,15 +255,20 @@ function execGeogebraCommands(input: unknown, api: GeoGebraAppletApi): unknown {
   const deletedObjects = beforeNames.filter((n) => !afterSet.has(n));
 
   const hasHardFailure = results.some((r) => !r.ok);
-  const rolledBackObjects: string[] = [];
-  const rollbackErrors: Array<{ object_name: string; message: string }> = [];
+  let rolledBackObjects: string[] = [];
+  let rollbackErrors: Array<{ object_name: string; message: string }> = [];
 
   if (hasHardFailure && createdObjects.length) {
     for (const name of createdObjects) {
-      const deleted = safe(() => api.deleteObject(name));
-      if (deleted === true) rolledBackObjects.push(name);
-      else rollbackErrors.push({ object_name: name, message: 'deleteObject returned false' });
+      safe(() => api.deleteObject(name));
     }
+
+    const afterRollbackNames = safe(() => api.getAllObjectNames()) ?? [];
+    const afterRollbackSet = new Set(afterRollbackNames);
+    rolledBackObjects = createdObjects.filter((n) => !afterRollbackSet.has(n));
+    rollbackErrors = createdObjects
+      .filter((n) => afterRollbackSet.has(n))
+      .map((object_name) => ({ object_name, message: 'Object still present after rollback' }));
   }
 
   if (!hasHardFailure) {
@@ -293,8 +298,10 @@ function deleteObjects(input: unknown, api: GeoGebraAppletApi): unknown {
   if (!Array.isArray(objects)) throw new Error('Missing input.objects');
 
   const names = objects.filter((n): n is string => typeof n === 'string' && n.trim().length > 0);
-  const deleted: string[] = [];
-  const failed: Array<{ object_name: string; message: string }> = [];
+  const beforeNames = safe(() => api.getAllObjectNames()) ?? [];
+  const beforeSet = new Set(beforeNames);
+  let deleted: string[] = [];
+  let failed: Array<{ object_name: string; message: string }> = [];
   const dialogs: string[] = [];
 
   for (const name of names) {
@@ -303,9 +310,7 @@ function deleteObjects(input: unknown, api: GeoGebraAppletApi): unknown {
       if (!drained.length) break;
       dialogs.push(...drained);
     }
-    const ok = safe(() => api.deleteObject(name));
-    if (ok === true) deleted.push(name);
-    else failed.push({ object_name: name, message: 'deleteObject returned false' });
+    safe(() => api.deleteObject(name));
   }
 
   for (let i = 0; i < 8; i++) {
@@ -313,6 +318,14 @@ function deleteObjects(input: unknown, api: GeoGebraAppletApi): unknown {
     if (!drained.length) break;
     dialogs.push(...drained);
   }
+
+  const afterNames = safe(() => api.getAllObjectNames()) ?? [];
+  const afterSet = new Set(afterNames);
+  deleted = names.filter((n) => beforeSet.has(n) && !afterSet.has(n));
+  failed = [
+    ...names.filter((n) => afterSet.has(n)).map((object_name) => ({ object_name, message: 'Object still present after deletion' })),
+    ...names.filter((n) => !beforeSet.has(n)).map((object_name) => ({ object_name, message: 'Object not found' })),
+  ];
 
   return {
     deleted_objects: deleted,

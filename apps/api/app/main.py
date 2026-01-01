@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse, Response
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -108,6 +109,17 @@ def healthz() -> dict:
 @app.get("/api/schema/v2")
 def get_schema_v2() -> dict:
     return get_protocol_schema_v2()
+
+
+@app.get("/api/graph/v2/mermaid", response_class=PlainTextResponse)
+def get_langgraph_mermaid() -> str:
+    return graph.get_graph().draw_mermaid()
+
+
+@app.get("/api/graph/v2/mermaid.png")
+def get_langgraph_mermaid_png() -> Response:
+    png_bytes = graph.get_graph().draw_mermaid_png()
+    return Response(content=png_bytes, media_type="image/png")
 
 
 @app.post("/api/threads")

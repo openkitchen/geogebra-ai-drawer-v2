@@ -527,8 +527,26 @@ def _clean_commands(commands: list[Any]) -> list[str]:
         s = c.strip()
         if not s:
             continue
+        normalized = re.sub(r"\s+", "", s).lower()
         # Never allow tool names to leak into commands.
         if "get_canvas_state" in s or "exec_geogebra_commands" in s or "eval_expression" in s:
+            continue
+        # Disallow UI-only / JS-API-only operations. Canvas hygiene and label visibility are handled
+        # deterministically in the frontend tool runner.
+        if normalized.startswith(
+            (
+                "showlabel(",
+                "setlabelvisible(",
+                "label(",
+                "setcaption(",
+                "setcolor(",
+                "setlinethickness(",
+                "setlinestyle(",
+                "setvisibleinview(",
+                "showaxes(",
+                "showgrid(",
+            )
+        ):
             continue
         cleaned.append(s)
     return cleaned[:80]
@@ -564,6 +582,9 @@ def generate_geogebra_commands(
             "- For key objects (circle/triangle/important lines), ALWAYS use explicit assignment labels (e.g. c = Circle(...), T = Polygon(...)).\n"
             "- Avoid Point(circle) that can coincide with existing points; prefer Rotate/Intersect/explicit construction when choosing points on a circle.\n"
             "- If you need to delete and redraw, include Delete(...) commands ONLY if you are sure; otherwise regenerate cleanly.\n"
+            "- IMPORTANT: You can ONLY output GeoGebra Input Bar commands executable by evalCommand.\n"
+            "- Do NOT include JS API / UI-only calls in commands[] (e.g. ShowLabel, SetLabelVisible, SetCaption, SetColor, ShowAxes, ShowGrid).\n"
+            "- Labels/visibility/styling/canvas hygiene are handled deterministically by the frontend.\n"
             "\n"
             "Output format (STRICT):\n"
             "Return ONLY a JSON object: {\"commands\": string[]}.\n"

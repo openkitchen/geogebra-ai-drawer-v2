@@ -78,7 +78,10 @@ def compute_canvas_diagnostics(objects: list[dict[str, Any]] | None) -> dict[str
                 if abs(ax - bx) <= 1e-9 and abs(ay - by) <= 1e-9:
                     duplicates.append({"a": a, "b": b, "xy": [ax, ay]})
 
-    ok = not zero_length_segments and not zero_area_polygons and not duplicates
+    # Duplicate points can be intentional (e.g. reusing a vertex across shapes) and do not
+    # necessarily indicate a broken diagram. Treat them as warnings only; hard-fail only on
+    # clearly degenerate geometry like zero-length segments or zero-area polygons.
+    ok = not zero_length_segments and not zero_area_polygons
 
     return {
         "ok": ok,
@@ -87,4 +90,3 @@ def compute_canvas_diagnostics(objects: list[dict[str, Any]] | None) -> dict[str
         "zero_area_polygons": zero_area_polygons,
         "duplicate_points": duplicates,
     }
-

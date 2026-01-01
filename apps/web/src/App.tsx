@@ -355,6 +355,9 @@ export default function App() {
   const [schemaV2, setSchemaV2] = useState<unknown | null>(null);
   const [schemaBusy, setSchemaBusy] = useState(false);
   const [schemaError, setSchemaError] = useState<string | null>(null);
+  const [langGraphMermaid, setLangGraphMermaid] = useState<string | null>(null);
+  const [langGraphBusy, setLangGraphBusy] = useState(false);
+  const [langGraphError, setLangGraphError] = useState<string | null>(null);
 
   const meta = useMemo(() => {
     const llmText =
@@ -622,6 +625,58 @@ export default function App() {
                 </div>
               </div>
               {schemaV2 ? <pre>{JSON.stringify(schemaV2, null, 2)}</pre> : null}
+            </details>
+
+            <details>
+              <summary>LangGraph</summary>
+              <div className="composer" style={{ marginTop: 8 }}>
+                <button
+                  className="secondary"
+                  onClick={async () => {
+                    setLangGraphBusy(true);
+                    setLangGraphError(null);
+                    try {
+                      const res = await fetch('/api/graph/v2/mermaid', { method: 'GET' });
+                      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+                      const text = await res.text();
+                      setLangGraphMermaid(text);
+                    } catch (e) {
+                      const message = e instanceof Error ? e.message : String(e);
+                      setLangGraphError(message);
+                    } finally {
+                      setLangGraphBusy(false);
+                    }
+                  }}
+                  disabled={langGraphBusy}
+                >
+                  Fetch /api/graph/v2/mermaid
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => void copyToClipboard(langGraphMermaid ?? '')}
+                  disabled={!langGraphMermaid}
+                >
+                  Copy mermaid
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    window.open('/api/graph/v2/mermaid.png', '_blank', 'noopener,noreferrer');
+                  }}
+                >
+                  Open graph PNG
+                </button>
+                <div className="meta">
+                  {langGraphBusy
+                    ? 'loading…'
+                    : langGraphError
+                      ? `ERROR: ${langGraphError}`
+                      : langGraphMermaid
+                        ? 'loaded'
+                        : 'not loaded'}
+                </div>
+              </div>
+              {langGraphMermaid ? <pre>{langGraphMermaid}</pre> : null}
             </details>
 
             <CanvasInspector ggbApi={ggbApi} />
