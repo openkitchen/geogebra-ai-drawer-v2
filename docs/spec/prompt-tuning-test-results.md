@@ -164,7 +164,7 @@ curl -X POST http://127.0.0.1:2024/threads \
    - 需要研究 Studio API 的完整格式（包括 `assistant_id`）
 
 2. **回归测试框架**:
-   - 实现 `scripts/run_regression_tests.py`
+   - ✅ 已实现 `scripts/run_regression_tests.py`（2026-01-04）
    - 支持 A/B 对比（修改前后的效果对比）
 
 3. **Prompt 版本管理**:
@@ -181,4 +181,3 @@ curl -X POST http://127.0.0.1:2024/threads \
 - Prompt 优化工作流：`docs/spec/prompt-optimization-workflow.md`
 - Studio 使用指南：`docs/spec/langgraph-studio-usage.md`
 - 快速创建 Thread：`docs/spec/langgraph-studio-quick-create.md`
-

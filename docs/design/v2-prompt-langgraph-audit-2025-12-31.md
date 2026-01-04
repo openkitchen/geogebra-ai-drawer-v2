@@ -44,7 +44,7 @@
 （已修复到 MVP）
 - v2 graph 已落地：`generate (full commands) → exec → get_canvas_state → verify → (delete_objects rollback + runtime_feedback) → retry`。
 - 现阶段 verify 覆盖：退化（重复点/零面积/零长度）+ 关键对象类型缺失（如缺圆/缺三角形）。
-- 仍待增强：语义验证（角度/约束/退化更丰富）与更可扩展的 measure 工具（已补齐最小 `eval_numeric`；见 todo）。
+- 仍待增强：语义验证（角度/约束/退化更丰富）与更可扩展的 measure 工具（已补齐最小 `eval_numeric`；见看板）。
 
 ### 2.3 “画布卫生/可读性兜底”（deterministic allowed）— ❌
 （已修复到 MVP）
@@ -123,7 +123,7 @@
 
 ---
 
-## 5) 推荐下一步（已写入 todo）
+## 5) 推荐下一步（已写入看板）
 
 为让 v2 能在删除 v1 后仍保持“可用+可修复+可读”，建议先补齐 P0：
 - **执行闭环**：把 v1 的 rollback/dialog/验证迁移到 v2 的前端工具/执行层，并把结果结构化回传给 graph。  

@@ -142,7 +142,7 @@
 
 1. **自动化工具**：
    - `scripts/v2_create_studio_thread.py` - 自动创建 Studio thread
-   - `scripts/run_regression_tests.py` - 回归测试（待实现）
+   - `scripts/run_regression_tests.py` - 回归测试（默认跑 deterministic 断言；可用 `--with-llm-judge` 启用 LLM Judge）
 
 2. **可视化工具**：
    - LangGraph Studio - 完整的执行过程可视化
@@ -239,4 +239,3 @@ diff /tmp/before_prompt_change.log /tmp/after_prompt_change.log
 - Prompt 优化工作流：`docs/spec/prompt-optimization-workflow.md`
 - Studio 使用指南：`docs/spec/langgraph-studio-usage.md`
 - 快速创建 Thread：`docs/spec/langgraph-studio-quick-create.md`
-

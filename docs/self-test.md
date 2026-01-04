@@ -66,7 +66,7 @@ python -m pip install -e .
 # 推荐：复用 v1 `.env.local` 的 LLM_MODEL_ALIASES_JSON + LLM_ROLE_BINDINGS_JSON
 # export V2_LLM_ROLE="main"          # 或 gemini_fast / gemini_think（OpenAI-compatible）
 # export V2_LLM_FALLBACK_ROLES="fast,fallback"  # 可选：主模型失败时自动换角色重试（逗号分隔）
-# （注意：若 role 指向 provider=google，目前会退回 stub，待 todo 120 补齐原生 Gemini）
+# （注意：若 role 指向 provider=google，目前会退回 stub，待后续补齐原生 Gemini）
 # 或：显式配置 OpenAI / OpenAI-compatible
 # export V2_LLM_API_KEY="..."
 # export V2_LLM_MODEL="gpt-5.2-chat-latest"

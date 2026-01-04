@@ -118,7 +118,8 @@ def load_config(args: argparse.Namespace) -> EvalConfig:
                         if chosen.get("provider") == "openai-compatible" and not judge_base_url:
                              pass # Warn?
         except Exception as e:
-            print(f"Warning: Failed to parse project LLM config for 'fast' role: {e}")
+            if getattr(args, "verbose", False):
+                print(f"Warning: Failed to parse project LLM config for 'fast' role: {e}")
 
     # Fallbacks
     if not judge_api_key:

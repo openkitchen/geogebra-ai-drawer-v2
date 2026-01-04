@@ -343,7 +343,7 @@ def export_training_dataset(
 
 **输出**：
 - `scripts/run_regression_tests.py`
-- 测试用例格式：`test_cases/*.yaml`
+- 测试用例格式：`docs/evals/golden_set.jsonl`（JSONL）
 - 报告格式：`logs/regression/regression-{prompt_version}.json`
 
 **依赖**：
@@ -533,11 +533,10 @@ def export_training_dataset(
 - [ ] **CI/CD 集成**：prompt 变更自动触发回归测试
 - [ ] **Prompt 模板库**：常见问题的 prompt 模板（可复用）
 - [ ] **自动化 Studio Thread 创建**：改进 `v2_create_studio_thread.py`，支持通过 API 自动创建（需要研究 Studio API 格式）
-- [ ] **回归测试框架**：实现 `scripts/run_regression_tests.py`，支持 A/B 对比
+- [x] **回归测试框架（基础）**：实现 `scripts/run_regression_tests.py`（A/B 对比待做）
 
 ---
 
 **文档版本**：v1.0  
 **最后更新**：2026-01-02  
 **维护者**：codex-A
-
