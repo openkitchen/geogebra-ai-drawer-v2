@@ -15,7 +15,9 @@
 
 ## 并行改代码（worktree）
 - **推荐**：每个 agent 一个 worktree 目录，避免同时改同一份工作区。
-- 用法：`bd worktree create .worktrees/<agent_name> --branch agent/<agent_name>`。
+- **原则**：不要在 worktree 里面再创建子 worktree（嵌套）。优先从“主 checkout”（`.git/` 是目录）创建，或创建到同级目录。
+- 从主 checkout 创建（推荐）：`bd worktree create .worktrees/<name> --branch <branch>`。
+- 已在 worktree 里：`bd worktree create ../<name> --branch <branch>`（sibling，避免嵌套）。
 
 ## 同步（团队模式）
 - `.beads/issues.jsonl` 会进入 git；多人/多机通过 git 同步任务。
