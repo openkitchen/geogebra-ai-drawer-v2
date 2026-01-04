@@ -25,7 +25,7 @@
   - Web UI（React/Vite）：`apps/web/`
   - API（Python/FastAPI + LangGraph）：`apps/api/`
   - Docs：`docs/`（v2 spec 以 `docs/spec/langgraph-orchestration.md` 为主；v1 相关文档标记为 legacy 或迁移）
-  - Collaboration：`docs/collaboration/`（todo/decision-log/inbox/self-test）
+  - Collaboration：`docs/collaboration/`（decision-log/inbox/self-test；任务用 bd 跟踪）
 
 ## 工具优先（画布感知）
 - LLM 不直接“猜”画布：获取/测量画布状态应通过工具调用，当前已有 `get_canvas_state`（后端 ai-sdk tool）。

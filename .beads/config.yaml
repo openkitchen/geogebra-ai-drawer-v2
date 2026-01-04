@@ -1,3 +1,7 @@
 sync:
   branch: beads-metadata
   remote: origin
+
+sync-branch: "beads-metadata"
+
+sync.remote: "origin"

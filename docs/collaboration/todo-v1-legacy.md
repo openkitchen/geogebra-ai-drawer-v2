@@ -1,6 +1,6 @@
 # v1 legacy tasks (archived)
 
-说明：从 2025-12-31 起，v2 worktree 的 `docs/collaboration/todo.md` 只跟踪 v2；以下为从原看板中移出的 v1 历史任务（仅存档，不再更新）。
+说明：从 2025-12-31 起，v2 worktree 使用 `bd`（beads）作为唯一任务源；以下为从原看板中移出的 v1 历史任务（仅存档，不再更新）。
 
 字段：`ID | Title | Owner | Status | DependsOn | LastUpdated | Notes`
 

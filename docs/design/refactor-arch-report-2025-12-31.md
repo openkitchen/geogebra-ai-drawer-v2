@@ -79,11 +79,11 @@
 2) **文档陈旧导致“规范 → 实现”链路断裂**
 - 证据：`apps/web/README.md` 仍写 scaffold-only，但实际已可运行；`docs/design/architecture.md` 与 `docs/tasks/*` 仍以 v1 为主；`docs/README.md` 同时索引 v1/v2 文档但缺少明确“默认路径”。  
 - 风险：协作沟通成本增加，尤其在“v2 允许破坏兼容”的前提下，文档若不及时标记会制造隐形冲突。  
-- 方向：把“哪些是 v2、哪些是 v1/legacy、迁移到哪里”写清楚，并把任务拆分/ID 统一到 `docs/collaboration/todo.md`。
+- 方向：把“哪些是 v2、哪些是 v1/legacy、迁移到哪里”写清楚，并把任务拆分/ID 统一到 `bd` issues（beads）。
 
 ---
 
-## 4) 重构任务清单（Prioritized，已写入 todo）
+## 4) 重构任务清单（Prioritized，已写入 bd）
 
 | ID | Priority | Title | Problem | Recommendation | Effort | Risk | DependsOn | Validation |
 |---:|:--:|---|---|---|:--:|:--:|---|---|
@@ -102,4 +102,3 @@
 1) **v1 在 v2 worktree 的定位**：继续保留作参考，还是移动到 `legacy/`（或逐步删除）以避免误用？  
 2) **协议事实源**：是否接受 “`/api/schema/v2` 作为唯一事实源 → TS types 自动生成/校验” 的方向？  
 3) **工具收敛策略**：`eval_expression` 是否纳入 v2 的正式 tool roster（server 允许/LLM 可选/文档写清），还是先移出 schema 直到真正使用？  
-

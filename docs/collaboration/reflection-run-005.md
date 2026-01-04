@@ -24,4 +24,4 @@
 ## 下一步
 - 批量跑 T2–T5 across providers，记录通过率；若 <80% ，进一步强调“自测角度”提示，必要时要求模型返回 obtuseVertex/外角意图字段以辅助校验。
 - 视需要在执行层加入“若 obtuseVertex 缺失则推断用户给定点或显式提示模型返回该字段”。
-- 更新 `docs/self-test.md` 变体（已加 T1），补充 T2–T3。`todo.md` 任务 005 完成后标记。
+- 更新 `docs/self-test.md` 变体（已加 T1），补充 T2–T3。对应任务完成后在 `bd` 标记状态与记录结果。
