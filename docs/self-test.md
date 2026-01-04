@@ -8,6 +8,38 @@
 
 ---
 
+## 0) 交付/验收方式（必须：ai-web + ai-api）
+
+> 规则：**ai-web** 或 **ai-api** 任一不通过，都不能算验收通过。
+
+### A. 启动（推荐一键）
+```bash
+./scripts/v2_dev.sh
+```
+
+### B. 浏览器验收（ai-web，必须用浏览器）
+- 打开：`http://127.0.0.1:3000/`
+- 期望：左侧 GeoGebra 画板可交互，状态显示 `ggbApplet: ready`
+- 发送一条消息（例如“画一个圆”）
+- 期望：画板出现目标图形；Debug/Timeline 能看到 `interrupt → resume → tool_end → final → run_end` 的完整链路
+
+### C. API 基础用例（ai-api，必须跑）
+另开终端（确保 API 已在 `127.0.0.1:3002` 或你的 `API_PORT` 上启动）：
+```bash
+./scripts/v2_acceptance_api.sh
+```
+期望：脚本以 `OK: v2 acceptance (api) passed.` 结束并返回 0。
+
+### D. 验收记录（建议）
+- 在 bd issue notes / PR 描述里记录：运行的命令 + 结果（脚本输出/截图）
+
+### E. Agent 责任（强制）
+- 如果你是自动化 agent（例如 Codex），**不得只把步骤留给人类**；必须自己完成 **B + C**，并在交付信息里附上：
+  - 浏览器验收的证据（截图路径/录屏/关键日志）
+  - `./scripts/v2_acceptance_api.sh` 的通过输出要点
+
+---
+
 ## v2（Python API）Smoke Test（thread/run + SSE）
 
 目标：先验证 v2 的 **thread/run + SSE** 基线端点可跑通（默认 stub；可选开启真实 LLM）。

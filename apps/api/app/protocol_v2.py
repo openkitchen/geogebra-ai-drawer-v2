@@ -134,6 +134,7 @@ class PlanUpdateData(BaseModel):
 
 class TokenData(BaseModel):
     text_delta: str
+    channel: Literal["content", "reasoning", "meta"] | None = None
 
 
 class ToolStartData(BaseModel):
@@ -247,6 +248,32 @@ RunStreamEvent = Union[
 ]
 
 
+class RunInput(BaseModel):
+    user_text: str = Field(..., min_length=1)
+
+
+class UIContext(BaseModel):
+    locale: str = "zh-CN"
+    debug: bool = False
+    plan_mode: bool = True
+    # Optional structured hint from the UI (NOT derived from text parsing).
+    # This is useful for suggestion chips and other deterministic UI actions.
+    intent_hint: dict[str, Any] | None = None
+
+
+class RunStreamRequest(BaseModel):
+    input: RunInput
+    ui_context: UIContext = Field(default_factory=UIContext)
+
+
+class ResumeCommand(BaseModel):
+    resume: ToolResumePayload
+
+
+class ResumeRequest(BaseModel):
+    command: ResumeCommand
+
+
 def get_protocol_schema_v2() -> dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
@@ -263,5 +290,7 @@ def get_protocol_schema_v2() -> dict[str, Any]:
             "ExecGeogebraCommandsOutput": ExecGeogebraCommandsOutput.model_json_schema(),
             "DeleteObjectsInput": DeleteObjectsInput.model_json_schema(),
             "DeleteObjectsOutput": DeleteObjectsOutput.model_json_schema(),
+            "RunStreamRequest": RunStreamRequest.model_json_schema(),
+            "ResumeRequest": ResumeRequest.model_json_schema(),
         },
     }

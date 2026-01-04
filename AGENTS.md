@@ -33,8 +33,11 @@
 - 新增工具请放后端（安全、可扩展），前端仅负责提供数据（例如对象摘要、测量结果）。
 
 ## 自主测试（先测再交付）
-- 完成改动后，开发者需自行选择合适方式验证（本地浏览器、curl、脚本或自测用例），确保核心场景通过，避免反复让 PM 代测。
-- 测试重点：新/改功能的主路径、最近问题的复现用例、关键工具调用是否触发（toolCalls）、返回字段完整性。
+- 交付/验收必须同时覆盖 **ai-web + ai-api**（任一不通过，都不能算通过）。
+- **ai-web（核心，必须用浏览器）**：必须用浏览器打开 `http://127.0.0.1:3000/` 做一次主路径交互（画板 ready + 发送消息 + 图形出现 + Debug/Timeline 有完整 interrupt/resume 链路）。
+- **ai-api（命令行）**：必须跑 `./scripts/v2_acceptance_api.sh`（healthz + schema + SSE interrupt/resume + repair once）。
+- **Agent 责任（强制）**：如果你是自动化 agent（例如 Codex/CI bot），**不得只“建议”人类去点**；你必须自己完成上述浏览器与命令行验收，并在交付信息里写明：使用的命令、通过/失败、以及浏览器验收的证据（例如截图路径/录屏/日志）。
+- 其余回归（按改动挑选）：最近问题复现用例、关键工具调用（toolCalls）、返回字段完整性；详见 `docs/self-test.md`。
 
 ## 并行开发流程
 - 任务系统：使用 **bd（beads）** 作为唯一任务源（团队模式：`.beads/issues.jsonl` 进 git；收尾必须 `bd sync`）。
@@ -65,20 +68,87 @@
 结束前清单（团队模式）：
 
 1. **File issues for remaining work**：把未完事项建成/补充到 bd issue（notes/依赖/assignee）。
-2. **Run quality gates**（如改了代码）：`npm --prefix apps/web run build` / `cd apps/api && uv run python -m compileall app`。
-3. **Update issue status**：进行中用 `bd update --status in_progress`；完成用 `bd close`。
-4. **SYNC + PUSH（必须）**：
+2. **Run acceptance gates（必须：ai-web + ai-api）**：
+   - 浏览器打开 `http://127.0.0.1:3000/` 跑一遍主路径（画板 ready + 发送消息 + 图形出现 + Debug/Timeline 有 interrupt/resume）。
+   - 命令行跑 `./scripts/v2_acceptance_api.sh`。
+   - 记录证据（截图/录屏/日志）到 bd issue notes / PR 描述。
+3. **Run quality gates**（如改了代码）：`npm --prefix apps/web run build` / `cd apps/api && uv run python -m compileall app`。
+4. **Update issue status**：进行中用 `bd update --status in_progress`；完成用 `bd close`。
+5. **SYNC + PUSH（必须）**：
    ```bash
    git pull --rebase
    bd sync
    git push
    git status  # MUST show "up to date with origin"
    ```
-5. **Clean up**：清理 stashes、无用 worktrees/分支。
-6. **Verify**：代码与 `.beads/issues.jsonl` 均已提交并 push；bd 里状态/notes 记录完整。
-7. **Hand off**：在 bd issue notes 写明结论、测试命令与下一步。
+6. **Clean up**：清理 stashes、无用 worktrees/分支。
+7. **Verify**：代码与 `.beads/issues.jsonl` 均已提交并 push；bd 里状态/notes 记录完整。
+8. **Hand off**：在 bd issue notes 写明结论、测试命令与下一步。
 
 **CRITICAL RULES:**
 - Work is NOT complete until `bd sync` and `git push` both succeed
 - NEVER stop before pushing - that leaves work stranded locally
 - Use `bd` for task tracking
+
+<!-- bv-agent-instructions-v1 -->
+
+---
+
+## Beads Workflow Integration
+
+This project uses [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) for issue tracking. Issues are stored in `.beads/` and tracked in git.
+
+### Essential Commands
+
+```bash
+# View issues (launches TUI - avoid in automated sessions)
+bv
+
+# CLI commands for agents (use these instead)
+bd ready              # Show issues ready to work (no blockers)
+bd list --status=open # All open issues
+bd show <id>          # Full issue details with dependencies
+bd create --title="..." --type=task --priority=2
+bd update <id> --status=in_progress
+bd close <id> --reason="Completed"
+bd close <id1> <id2>  # Close multiple issues at once
+bd sync               # Commit and push changes
+```
+
+### Workflow Pattern
+
+1. **Start**: Run `bd ready` to find actionable work
+2. **Claim**: Use `bd update <id> --status=in_progress`
+3. **Work**: Implement the task
+4. **Complete**: Use `bd close <id>`
+5. **Sync**: Always run `bd sync` at session end
+
+### Key Concepts
+
+- **Dependencies**: Issues can block other issues. `bd ready` shows only unblocked work.
+- **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (use numbers, not words)
+- **Types**: task, bug, feature, epic, question, docs
+- **Blocking**: `bd dep add <issue> <depends-on>` to add dependencies
+
+### Session Protocol
+
+**Before ending any session, run this checklist:**
+
+```bash
+git status              # Check what changed
+git add <files>         # Stage code changes
+bd sync                 # Commit beads changes
+git commit -m "..."     # Commit code
+bd sync                 # Commit any new beads changes
+git push                # Push to remote
+```
+
+### Best Practices
+
+- Check `bd ready` at session start to find available work
+- Update status as you work (in_progress → closed)
+- Create new issues with `bd create` when you discover tasks
+- Use descriptive titles and set appropriate priority/type
+- Always `bd sync` before ending session
+
+<!-- end-bv-agent-instructions -->

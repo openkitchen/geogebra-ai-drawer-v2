@@ -1,3 +1,16 @@
+import {
+  DeleteObjectsInput,
+  DeleteObjectsOutput,
+  EvalExpressionInput,
+  EvalExpressionOutput,
+  EvalNumericInput,
+  EvalNumericOutput,
+  ExecGeogebraCommandsInput,
+  ExecGeogebraCommandsOutput,
+  GetCanvasStateInput,
+  GetCanvasStateOutput,
+} from './schema';
+
 type AnyRecord = Record<string, unknown>;
 
 export type FrontendToolOk = {
@@ -164,14 +177,14 @@ function consumeGeoGebraDialogs(): string[] {
 
 function toIncludeList(input: unknown): string[] {
   if (!input || typeof input !== 'object') return ['objects'];
-  const include = (input as AnyRecord).include;
+  const include = (input as GetCanvasStateInput).include;
   if (!Array.isArray(include)) return ['objects'];
   return include.filter((x): x is string => typeof x === 'string');
 }
 
-function getCanvasState(input: unknown, api: GeoGebraAppletApi): unknown {
+function getCanvasState(input: unknown, api: GeoGebraAppletApi): GetCanvasStateOutput {
   const include = toIncludeList(input);
-  const result: AnyRecord = {};
+  const result: GetCanvasStateOutput = {};
 
   if (include.includes('objects')) {
     const names = safe(() => api.getAllObjectNames()) ?? [];
@@ -191,9 +204,9 @@ function getCanvasState(input: unknown, api: GeoGebraAppletApi): unknown {
   return result;
 }
 
-function evalExpression(input: unknown, api: GeoGebraAppletApi): unknown {
+function evalExpression(input: unknown, api: GeoGebraAppletApi): EvalExpressionOutput {
   if (!input || typeof input !== 'object') throw new Error('Missing input');
-  const expr = (input as AnyRecord).expression;
+  const expr = (input as EvalExpressionInput).expression;
   if (typeof expr !== 'string' || !expr.trim()) throw new Error('Missing input.expression');
 
   const ok = api.evalCommand(expr);
@@ -219,9 +232,9 @@ function parseFirstNumber(valueString: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function evalNumeric(input: unknown, api: GeoGebraAppletApi): unknown {
+function evalNumeric(input: unknown, api: GeoGebraAppletApi): EvalNumericOutput {
   if (!input || typeof input !== 'object') throw new Error('Missing input');
-  const expressionsRaw = (input as AnyRecord).expressions;
+  const expressionsRaw = (input as EvalNumericInput).expressions;
   if (!Array.isArray(expressionsRaw)) throw new Error('Missing input.expressions');
   const expressions = expressionsRaw
     .filter((e): e is string => typeof e === 'string')
@@ -268,7 +281,7 @@ function evalNumeric(input: unknown, api: GeoGebraAppletApi): unknown {
     const errorString = safe(() => (api as any).getErrorString?.()) as unknown;
     const error =
       ok
-        ? null
+        ? undefined
         : typeof errorString === 'string' && errorString.trim()
           ? { message: errorString.trim() }
           : { message: 'Expression failed' };
@@ -286,9 +299,9 @@ function evalNumeric(input: unknown, api: GeoGebraAppletApi): unknown {
   return { results, dialogs: dialogs.length ? dialogs : null };
 }
 
-function execGeogebraCommands(input: unknown, api: GeoGebraAppletApi): unknown {
+function execGeogebraCommands(input: unknown, api: GeoGebraAppletApi): ExecGeogebraCommandsOutput {
   if (!input || typeof input !== 'object') throw new Error('Missing input');
-  const commands = (input as AnyRecord).commands;
+  const commands = (input as ExecGeogebraCommandsInput).commands;
   if (!Array.isArray(commands)) throw new Error('Missing input.commands');
   const lines = commands.filter((c): c is string => typeof c === 'string' && c.trim().length > 0);
   const beforeNames = safe(() => api.getAllObjectNames()) ?? [];
@@ -313,7 +326,7 @@ function execGeogebraCommands(input: unknown, api: GeoGebraAppletApi): unknown {
     const errorString = safe(() => (api as any).getErrorString?.()) as unknown;
     const error =
       ok
-        ? null
+        ? undefined
         : typeof errorString === 'string' && errorString.trim()
           ? { message: errorString.trim() }
           : { message: 'Command failed' };
@@ -370,9 +383,9 @@ function execGeogebraCommands(input: unknown, api: GeoGebraAppletApi): unknown {
   };
 }
 
-function deleteObjects(input: unknown, api: GeoGebraAppletApi): unknown {
+function deleteObjects(input: unknown, api: GeoGebraAppletApi): DeleteObjectsOutput {
   if (!input || typeof input !== 'object') throw new Error('Missing input');
-  const objects = (input as AnyRecord).objects;
+  const objects = (input as DeleteObjectsInput).objects;
   if (!Array.isArray(objects)) throw new Error('Missing input.objects');
 
   const names = objects.filter((n): n is string => typeof n === 'string' && n.trim().length > 0);

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --port 5173"
+    "preview": "vite preview --port 5173",
+    "gen:types": "node scripts/gen-types.mjs"
   },
   "dependencies": {
     "react": "^19.2.3",

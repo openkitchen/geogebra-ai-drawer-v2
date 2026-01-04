@@ -1,18 +1,6 @@
 import { useMemo, useState } from 'react';
 import { runFrontendTool } from './frontendTools';
-
-type CanvasObject = {
-  name: string;
-  type?: string | null;
-  visible?: boolean | null;
-  valueString?: string | null;
-  definitionString?: string | null;
-  commandString?: string | null;
-};
-
-type CanvasStateOutput = {
-  objects?: CanvasObject[];
-};
+import { GetCanvasStateOutput } from './schema';
 
 export type CanvasInspectorProps = {
   ggbApi: GeoGebraAppletApi | null;
@@ -21,7 +9,7 @@ export type CanvasInspectorProps = {
 export function CanvasInspector({ ggbApi }: CanvasInspectorProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [output, setOutput] = useState<CanvasStateOutput | null>(null);
+  const [output, setOutput] = useState<GetCanvasStateOutput | null>(null);
 
   const objects = useMemo(() => {
     const list = output?.objects;
@@ -39,7 +27,7 @@ export function CanvasInspector({ ggbApi }: CanvasInspectorProps) {
         ggbApi,
       });
       if (!result.ok) throw new Error(result.error.message);
-      setOutput(result.output as CanvasStateOutput);
+      setOutput(result.output as GetCanvasStateOutput);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);

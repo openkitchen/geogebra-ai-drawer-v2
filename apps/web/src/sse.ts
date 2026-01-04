@@ -1,41 +1,33 @@
+import type { RunStreamEvent as ProtocolRunStreamEvent } from './schema';
+
+export type ClientErrorEvent = {
+  event: 'client_error';
+  data: { at: 'runs_stream' | 'resume' | 'sse'; status: number; statusText: string; detail?: unknown; body?: string };
+};
+
+export type VerificationEvent = { event: 'verification'; data: { label: string; ok: boolean; details?: unknown } };
+
+export type ReflectionEvent = { event: 'reflection'; data: { summary: string; failure_code?: string; next_step?: string } };
+
+export type ApprovalRequestEvent = {
+  event: 'approval_request';
+  data: {
+    request_id: string;
+    kind: 'dangerous_action' | 'tool' | 'write';
+    message: string;
+    data?: unknown;
+  };
+};
+
+export type ApprovalResultEvent = { event: 'approval_result'; data: { request_id: string; decision: 'approve' | 'reject' | 'edit'; data?: unknown } };
+
 export type RunStreamEvent =
-  | {
-      event: 'run_start';
-      data: {
-        run_id: string;
-        thread_id: string;
-        protocol_version?: string;
-        llm_enabled?: boolean;
-        llm_model?: string | null;
-        llm_base_url?: string | null;
-      };
-    }
-  | { event: 'node_start'; data: { name: string } }
-  | { event: 'plan_update'; data: { plan: Array<{ id: string; text: string; done?: boolean }> } }
-  | { event: 'token'; data: { text_delta: string; channel?: 'content' | 'reasoning' | 'meta' } }
-  | { event: 'tool_start'; data: { tool_name: string; tool_call_id: string; input: unknown } }
-  | { event: 'interrupt'; data: { kind: 'frontend_tool'; tool_name: string; tool_call_id: string; input: unknown } }
-  | { event: 'tool_end'; data: { tool_name: string; tool_call_id: string; output: unknown; ok: boolean; error?: unknown } }
-  | {
-      event: 'client_error';
-      data: { at: 'runs_stream' | 'resume' | 'sse'; status: number; statusText: string; detail?: unknown; body?: string };
-    }
-  | { event: 'verification'; data: { label: string; ok: boolean; details?: unknown } }
-  | { event: 'reflection'; data: { summary: string; failure_code?: string; next_step?: string } }
-  | {
-      event: 'approval_request';
-      data: {
-        request_id: string;
-        kind: 'dangerous_action' | 'tool' | 'write';
-        message: string;
-        data?: unknown;
-      };
-    }
-  | { event: 'approval_result'; data: { request_id: string; decision: 'approve' | 'reject' | 'edit'; data?: unknown } }
-  | { event: 'budget'; data: { model_calls_used?: number; model_calls_limit?: number; tool_calls_used?: number; tool_calls_limit?: number } }
-  | { event: 'node_end'; data: { name: string } }
-  | { event: 'final'; data: { answer: { explanation: string; overlay_text?: unknown } } }
-  | { event: 'run_end'; data: {} };
+  | ProtocolRunStreamEvent
+  | ClientErrorEvent
+  | VerificationEvent
+  | ReflectionEvent
+  | ApprovalRequestEvent
+  | ApprovalResultEvent;
 
 type ParsedSseMessage = { event?: string; data?: string };
 
