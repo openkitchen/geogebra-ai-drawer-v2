@@ -4,68 +4,45 @@ The backend server loads configuration from:
 - `.env.local` (preferred)
 - `.env` (fallback)
 
-### Minimal example (VectorEngine)
+### Minimal example (Moonshot)
 
 ```bash
 API_PROXY_PORT=3002
 
 # Put real keys as separate env vars (do not commit real keys):
-VECTORENGINE_API_KEY=YOUR_VECTOR_ENGINE_KEY
+MOONSHOT_API_KEY=YOUR_MOONSHOT_API_KEY
 
-# v1-style model routing (recommended: aliases + roles)
+# Model routing (recommended: aliases + roles)
 LLM_MODEL_ALIASES_JSON='[
   {
-    "id": "ve-gpt-4.1-mini",
-    "label": "GPT-4.1 Mini (VectorEngine)",
+    "id": "ms-kimi-k2-thinking",
+    "label": "Kimi K2 Thinking (Moonshot)",
     "provider": "openai-compatible",
-    "baseURL": "https://api.vectorengine.ai/v1",
-    "apiKey": "${VECTORENGINE_API_KEY}",
-    "modelId": "gpt-4.1-mini-2025-04-14"
+    "baseURL": "https://api.moonshot.cn/v1",
+    "apiKey": "${MOONSHOT_API_KEY}",
+    "modelId": "kimi-k2-thinking"
   },
   {
-    "id": "ve-o4-mini",
-    "label": "o4-mini (VectorEngine)",
+    "id": "ms-moonshot-v1-8k",
+    "label": "moonshot-v1-8k (Moonshot, fast/intent)",
     "provider": "openai-compatible",
-    "baseURL": "https://api.vectorengine.ai/v1",
-    "apiKey": "${VECTORENGINE_API_KEY}",
-    "modelId": "o4-mini-2025-04-16"
-  },
-  {
-    "id": "ve-gemini-2.5-pro",
-    "label": "Gemini 2.5 Pro (VectorEngine, OpenAI-compatible)",
-    "provider": "openai-compatible",
-    "baseURL": "https://api.vectorengine.ai/v1",
-    "apiKey": "${VECTORENGINE_API_KEY}",
-    "modelId": "gemini-2.5-pro"
-  },
-  {
-    "id": "ve-gemini-3-pro-preview",
-    "label": "Gemini 3 Pro Preview (VectorEngine, OpenAI-compatible)",
-    "provider": "openai-compatible",
-    "baseURL": "https://api.vectorengine.ai/v1",
-    "apiKey": "${VECTORENGINE_API_KEY}",
-    "modelId": "gemini-3-pro-preview"
-  },
-  {
-    "id": "ve-gemini-flash",
-    "label": "Gemini Flash (VectorEngine, OpenAI-compatible)",
-    "provider": "openai-compatible",
-    "baseURL": "https://api.vectorengine.ai/v1",
-    "apiKey": "${VECTORENGINE_API_KEY}",
-    "modelId": "gemini-flash-latest"
+    "baseURL": "https://api.moonshot.cn/v1",
+    "apiKey": "${MOONSHOT_API_KEY}",
+    "modelId": "moonshot-v1-8k"
   }
 ]'
 
 LLM_ROLE_BINDINGS_JSON='{
-  "main": "ve-gpt-4.1-mini",
-  "repair": "ve-gemini-2.5-pro",
-  "fast": "ve-o4-mini",
-  "gemini_main": "ve-gemini-3-pro-preview",
-  "gemini_fast": "ve-gemini-flash"
+  "main": "ms-kimi-k2-thinking",
+  "repair": "ms-kimi-k2-thinking",
+  "fast": "ms-moonshot-v1-8k",
+  "fallback": "ms-moonshot-v1-8k"
 }'
 
 # v2 (Python API) model selection (reuse aliases + role bindings above)
 V2_LLM_ROLE=main
+# Explicit: intent classifier uses the fast role.
+V2_LLM_INTENT_ROLE=fast
 V2_LLM_TIMEOUT_S=20
 V2_LLM_TEMPERATURE=0
 ```
@@ -80,4 +57,4 @@ LLM_TIMEOUT_MS=20000
 - **Do not commit real keys**.
 - `provider` must be one of: `openai` | `google` | `openai-compatible`.
 - `baseURL` is required for `openai-compatible` and optional for `openai`/`google`.
-- VectorEngine `modelId` list can be discovered via `GET /v1/models` (OpenAI-compatible).
+- Many OpenAI-compatible gateways expose a model list via `GET /v1/models`.
