@@ -29,6 +29,7 @@
 ./scripts/v2_acceptance_api.sh
 ```
 期望：脚本以 `OK: v2 acceptance (api) passed.` 结束并返回 0。
+如果出现 `401/403` / `insufficient_quota` / “没能调用语言模型”，先检查并更新 `.env.local`（参考 `docs/env.example.md`），然后重启 `./scripts/v2_dev.sh` 再重跑。
 
 ### D. 验收记录（建议）
 - 在 bd issue notes / PR 描述里记录：运行的命令 + 结果（脚本输出/截图）

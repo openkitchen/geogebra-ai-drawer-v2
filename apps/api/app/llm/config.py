@@ -31,7 +31,15 @@ def _expand_env_refs(raw: str) -> str:
         key = match.group(1)
         return os.getenv(key) or ""
 
-    return _ENV_REF_RE.sub(repl, raw)
+    # Allow chained env refs, e.g. MOONSHOT_API_KEY=${KIMI_API_KEY}.
+    # Expand a few rounds to avoid infinite loops on accidental cycles.
+    out = raw
+    for _ in range(6):
+        expanded = _ENV_REF_RE.sub(repl, out)
+        if expanded == out:
+            break
+        out = expanded
+    return out
 
 
 def _load_env_file(path: Path) -> None:
@@ -76,17 +84,21 @@ def _maybe_load_env_files() -> None:
 
     root = _repo_root()
     # Always prefer this worktree's env files.
-    candidates: list[Path] = [root / ".env.local", root / ".env"]
+    primary: list[Path] = [root / ".env.local", root / ".env"]
+    for path in primary:
+        if path.is_file():
+            _load_env_file(path)
 
     # Optional: load an additional env file to fill missing values (e.g. secrets).
     # NOTE: this does NOT override existing env vars or values already loaded above.
     override = (os.getenv("V2_ENV_FILE") or "").strip()
     if override:
-        candidates.append(Path(override))
-
-    for path in candidates:
-        if path.is_file():
-            _load_env_file(path)
+        override_path = Path(override)
+        if not override_path.is_absolute():
+            # Treat relative override paths as repo-root relative, not CWD relative.
+            override_path = root / override_path
+        if override_path.is_file():
+            _load_env_file(override_path)
 
     _maybe_alias_langsmith_env_vars()
 
@@ -338,5 +350,3 @@ def list_fallback_roles() -> tuple[str, ...]:
     """Expose fallback roles as a stable tuple for other modules."""
 
     return tuple(_fallback_roles())
-
-

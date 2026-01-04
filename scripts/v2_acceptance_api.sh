@@ -14,12 +14,16 @@ BASE_URL="${BASE_URL%/}"
 
 echo "v2 acceptance (api): base_url=${BASE_URL}"
 
-python3 - <<PY
+BASE_URL="$BASE_URL" python3 - <<'PY'
 import json
 import sys
+import os
 import urllib.request
 
-base_url = ${BASE_URL!r}.rstrip("/")
+base_url = str(os.environ.get("BASE_URL") or "").rstrip("/")
+if not base_url:
+    print("ERR: BASE_URL is empty", file=sys.stderr)
+    raise SystemExit(2)
 
 def get(path: str, *, accept: str = "application/json", timeout_s: float = 5.0) -> tuple[int, str]:
     req = urllib.request.Request(
@@ -63,6 +67,7 @@ python3 "$ROOT_DIR/scripts/v2_smoke_test.py" \
   --base-url "$BASE_URL" \
   --turn "画一个圆" \
   --turn "再画一个三角形ABC" \
+  --require-tool exec_geogebra_commands \
   --force-repair-once
 
 echo "OK: v2 acceptance (api) passed."

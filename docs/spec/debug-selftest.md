@@ -9,6 +9,7 @@
 - **ai-web（浏览器）**：必须在 `http://127.0.0.1:3000/` 走一遍主路径（画板 ready + 发送消息 + 图形出现 + Debug/Timeline 能看到 interrupt/resume 链路）。
 - **ai-api（脚本）**：必须跑 `./scripts/v2_acceptance_api.sh`（healthz + schema + thread/run SSE + interrupt/resume + repair once）。
 - **Agent 责任**：自动化 agent 必须亲自执行上述两项，并在交付信息中提供浏览器验收证据（截图/录屏/日志）与脚本输出摘要。
+- **环境注意**：若出现 `401/403` / `insufficient_quota` / “没能调用语言模型”，属于 `.env.local` 的 key/role 绑定不可用；先修配置并重启服务再验收。
 - 详细操作步骤与期望：见 `docs/self-test.md` 的「0) 交付/验收方式」。
 
 ### 测试用例格式

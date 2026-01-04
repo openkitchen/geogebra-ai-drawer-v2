@@ -31,16 +31,19 @@ def _extract_json_object(raw: str) -> str | None:
 
 @lru_cache(maxsize=8)
 def _build_llm(*, api_key: str, base_url: str | None, model: str, temperature: float, timeout_s: float) -> ChatOpenAI:
+    # NOTE: Use the new langchain-openai parameter names so timeout/retry behavior is effective.
     kwargs: dict[str, Any] = {
-        "model_name": model,
+        "model": model,
         "temperature": temperature,
-        "openai_api_key": api_key,
-        "request_timeout": timeout_s,
+        "api_key": api_key,
+        "timeout": timeout_s,
+        # We already implement fallback at higher levels; keep low-level retries minimal.
+        "max_retries": 0,
         # Many OpenAI-compatible gateways don't support the Responses API yet.
         "use_responses_api": False,
     }
     if base_url:
-        kwargs["openai_api_base"] = base_url
+        kwargs["base_url"] = base_url
     return ChatOpenAI(**kwargs)
 
 
@@ -504,5 +507,4 @@ def raise_on_none(value: Any, *, message: str) -> Any:
     if value is None:
         raise LlmInvocationError(message)
     return value
-
 

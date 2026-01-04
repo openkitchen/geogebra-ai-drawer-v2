@@ -469,6 +469,7 @@ def run_smoke(
     timeout_s: float,
     verbose: bool,
     force_repair_once: bool,
+    required_tools: set[str] | None = None,
 ) -> int:
     if thread_id is None:
         thread = _http_json(method="POST", url=f"{base_url}/api/threads", timeout_s=timeout_s)
@@ -487,6 +488,8 @@ def run_smoke(
     canvas = canvas or FakeCanvas()
     saw_exec = False
     forced = False
+    required = {t.strip() for t in (required_tools or set()) if t and t.strip()}
+    seen_tools: set[str] = set()
 
     body = {"input": {"user_text": user_text}, "ui_context": {"debug": True, "plan_mode": True}}
     for ev in _http_sse(
@@ -503,6 +506,9 @@ def run_smoke(
             saw_budget = True
         if ev.event == "interrupt" and isinstance(ev.data, dict):
             interrupt = ev.data
+            tool_name = str(interrupt.get("tool_name") or "")
+            if tool_name:
+                seen_tools.add(tool_name)
             break
         if ev.event == "run_end":
             break
@@ -518,6 +524,10 @@ def run_smoke(
         return 2
 
     if interrupt is None:
+        if required:
+            missing = sorted(required - seen_tools)
+            print(f"ERR: required tool(s) not seen: {missing}", file=sys.stderr)
+            return 2
         print("OK: run finished without interrupt (no tool required).")
         return 0
 
@@ -528,6 +538,7 @@ def run_smoke(
         if not tool_name or not tool_call_id:
             print("ERR: interrupt missing tool_name/tool_call_id", file=sys.stderr)
             return 2
+        seen_tools.add(tool_name)
 
         tool_output = _make_tool_output(
             tool_name=tool_name,
@@ -580,6 +591,11 @@ def run_smoke(
             print("ERR: resume did not produce budget", file=sys.stderr)
             return 2
         if interrupt is None:
+            if required:
+                missing = sorted(required - seen_tools)
+                if missing:
+                    print(f"ERR: required tool(s) not seen: {missing}", file=sys.stderr)
+                    return 2
             print(f"OK: completed after {step} resume(s). run_id={run_id}")
             return 0
 
@@ -595,6 +611,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--thread-id", help="Reuse an existing thread_id (optional)")
     parser.add_argument("--timeout-s", type=float, default=30.0, help="HTTP timeout seconds")
     parser.add_argument("--verbose", action="store_true", help="Print full JSON payloads")
+    parser.add_argument(
+        "--require-tool",
+        action="append",
+        help="Require at least one interrupt for this tool name (repeatable).",
+    )
     parser.add_argument("--force-repair-once", action="store_true", help="Force one verify failure to exercise repair loop")
     args = parser.parse_args(argv)
 
@@ -603,6 +624,8 @@ def main(argv: list[str]) -> int:
         turns = [t for t in (args.turn or []) if isinstance(t, str) and t.strip()]
         if not turns:
             turns = [args.user_text]
+
+        required_tools = {str(t).strip() for t in (args.require_tool or []) if isinstance(t, str) and t.strip()}
 
         shared_canvas = FakeCanvas()
         thread_id = str(args.thread_id) if args.thread_id else None
@@ -624,6 +647,7 @@ def main(argv: list[str]) -> int:
                 timeout_s=args.timeout_s,
                 verbose=args.verbose,
                 force_repair_once=bool(args.force_repair_once) and i == 1,
+                required_tools=required_tools,
             )
             if code != 0:
                 return code

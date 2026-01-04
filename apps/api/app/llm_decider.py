@@ -133,7 +133,15 @@ def _expand_env_refs(raw: str) -> str:
         key = match.group(1)
         return os.getenv(key) or ""
 
-    return _ENV_REF_RE.sub(repl, raw)
+    # Allow chained env refs, e.g. MOONSHOT_API_KEY=${KIMI_API_KEY}.
+    # Expand a few rounds to avoid infinite loops on accidental cycles.
+    out = raw
+    for _ in range(6):
+        expanded = _ENV_REF_RE.sub(repl, out)
+        if expanded == out:
+            break
+        out = expanded
+    return out
 
 
 def _extract_json_object(raw: str) -> str | None:
@@ -201,17 +209,21 @@ def _maybe_load_env_files() -> None:
 
     root = _repo_root()
     # Always prefer this worktree's env files.
-    candidates: list[Path] = [root / ".env.local", root / ".env"]
+    primary: list[Path] = [root / ".env.local", root / ".env"]
+    for path in primary:
+        if path.is_file():
+            _load_env_file(path)
 
     # Optional: load an additional env file to fill missing values (e.g. secrets).
     # NOTE: this does NOT override existing env vars or values already loaded above.
     override = (os.getenv("V2_ENV_FILE") or "").strip()
     if override:
-        candidates.append(Path(override))
-
-    for path in candidates:
-        if path.is_file():
-            _load_env_file(path)
+        override_path = Path(override)
+        if not override_path.is_absolute():
+            # Treat relative override paths as repo-root relative, not CWD relative.
+            override_path = root / override_path
+        if override_path.is_file():
+            _load_env_file(override_path)
 
     _maybe_alias_langsmith_env_vars()
 
@@ -467,16 +479,19 @@ def _build_llm(
     temperature: float,
     timeout_s: float,
 ) -> ChatOpenAI:
+    # NOTE: Use the new langchain-openai parameter names so timeout/retry behavior is effective.
     kwargs: dict[str, Any] = {
-        "model_name": model,
+        "model": model,
         "temperature": temperature,
-        "openai_api_key": api_key,
-        "request_timeout": timeout_s,
+        "api_key": api_key,
+        "timeout": timeout_s,
+        # We already implement role fallbacks at a higher level; keep low-level retries minimal.
+        "max_retries": 0,
         # Many OpenAI-compatible gateways don't support the Responses API yet.
         "use_responses_api": False,
     }
     if base_url:
-        kwargs["openai_api_base"] = base_url
+        kwargs["base_url"] = base_url
     return ChatOpenAI(**kwargs)
 
 

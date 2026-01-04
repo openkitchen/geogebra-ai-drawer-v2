@@ -37,6 +37,7 @@
 - **ai-web（核心，必须用浏览器）**：必须用浏览器打开 `http://127.0.0.1:3000/` 做一次主路径交互（画板 ready + 发送消息 + 图形出现 + Debug/Timeline 有完整 interrupt/resume 链路）。
 - **ai-api（命令行）**：必须跑 `./scripts/v2_acceptance_api.sh`（healthz + schema + SSE interrupt/resume + repair once）。
 - **Agent 责任（强制）**：如果你是自动化 agent（例如 Codex/CI bot），**不得只“建议”人类去点**；你必须自己完成上述浏览器与命令行验收，并在交付信息里写明：使用的命令、通过/失败、以及浏览器验收的证据（例如截图路径/录屏/日志）。
+- **教训（别忘）**：如果浏览器/日志里出现 `401/403`、`insufficient_quota`、或“没能调用语言模型”，优先检查并更新 `.env.local` 的 key/role 绑定（必要时改用 `V2_ENV_FILE=../geogebra-ai-drawer/.env.local` 复用 v1 的密钥），并**重启** `./scripts/v2_dev.sh` 后再重新验收。
 - 其余回归（按改动挑选）：最近问题复现用例、关键工具调用（toolCalls）、返回字段完整性；详见 `docs/self-test.md`。
 
 ## 并行开发流程
