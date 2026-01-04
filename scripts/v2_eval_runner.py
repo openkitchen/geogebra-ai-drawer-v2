@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import math
 import os
 import re
 import sys
@@ -141,20 +142,220 @@ def load_config(args: argparse.Namespace) -> EvalConfig:
 
 # --- Fake Canvas (Ported from smoke_test) ---
 
+_POINT_RE = re.compile(
+    r"\(\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s*,\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s*\)"
+)
+
+_ROTATE_RE = re.compile(
+    r"rotate\(\s*([A-Za-z][A-Za-z0-9_]*)\s*,\s*([-+]?\d+(?:\.\d+)?)\s*°\s*,\s*([A-Za-z][A-Za-z0-9_]*)\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _extract_assignment_label(command: str) -> str | None:
+    if "=" not in command:
+        return None
+    left, _ = command.split("=", 1)
+    label = left.strip()
+    if not label:
+        return None
+    # Avoid returning "Circle(A,1)" etc.
+    if any(ch in label for ch in " ()"):
+        return None
+    return label
+
+
+def _infer_object_type(command: str) -> str | None:
+    t = command.strip()
+    rhs = t.split("=", 1)[1].strip() if "=" in t else t
+    low = rhs.lower()
+    if low.startswith("(") and "," in low and ")" in low:
+        return "point"
+    if low.startswith("rotate(") or "rotate(" in low:
+        return "point"
+    if low.startswith("midpoint(") or "midpoint(" in low or "中点(" in rhs:
+        return "point"
+    if "circle(" in low or low.startswith("circle("):
+        return "circle"
+    if "polygon(" in low or low.startswith("polygon("):
+        return "polygon"
+    if "segment(" in low or low.startswith("segment("):
+        return "segment"
+    if "line(" in low or low.startswith("line("):
+        return "line"
+    return None
+
+
+def _parse_point_coords(command: str) -> tuple[float, float] | None:
+    m = _POINT_RE.search(command)
+    if not m:
+        return None
+    try:
+        return (float(m.group(1)), float(m.group(2)))
+    except Exception:
+        return None
+
+
+def _polygon_area(points: list[tuple[float, float]]) -> float:
+    if len(points) < 3:
+        return 0.0
+    s = 0.0
+    for i in range(len(points)):
+        x1, y1 = points[i]
+        x2, y2 = points[(i + 1) % len(points)]
+        s += x1 * y2 - x2 * y1
+    return abs(s) / 2.0
+
+
+def _try_eval_point(rhs: str, known: dict[str, tuple[float, float]]) -> tuple[float, float] | None:
+    m = _ROTATE_RE.search(rhs)
+    if m:
+        src = m.group(1)
+        deg = float(m.group(2))
+        center = m.group(3)
+        if src in known and center in known:
+            x, y = known[src]
+            cx, cy = known[center]
+            dx = x - cx
+            dy = y - cy
+            rad = math.radians(deg)
+            rx = dx * math.cos(rad) - dy * math.sin(rad) + cx
+            ry = dx * math.sin(rad) + dy * math.cos(rad) + cy
+            return (rx, ry)
+
+    # Midpoint(A, B) / 中点(A, B)
+    if "midpoint" in rhs.lower() or "中点" in rhs:
+        tokens = re.findall(r"[A-Za-z][A-Za-z0-9_]*", rhs)
+        if len(tokens) >= 3:
+            a = tokens[1]
+            b = tokens[2]
+            if a in known and b in known:
+                ax, ay = known[a]
+                bx, by = known[b]
+                return ((ax + bx) / 2.0, (ay + by) / 2.0)
+
+    return None
+
+
 @dataclass
 class FakeCanvas:
-    objects: List[Dict[str, Any]] = field(default_factory=list)
+    objects_by_name: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    point_coords: Dict[str, tuple[float, float]] = field(default_factory=dict)
+    auto_counters: Dict[str, int] = field(default_factory=dict)
 
-    def apply_commands(self, commands: List[str]) -> List[str]:
-        # Minimal implementation: just acknowledge creation
-        created = []
+    def snapshot_objects(self) -> List[Dict[str, Any]]:
+        # Preserve insertion order (dicts are ordered in Python 3.7+).
+        return list(self.objects_by_name.values())
+
+    def _next_auto_label(self, kind: str) -> str:
+        n = int(self.auto_counters.get(kind, 0)) + 1
+        self.auto_counters[kind] = n
+        prefix = {
+            "point": "P",
+            "circle": "c",
+            "polygon": "poly",
+            "segment": "s",
+            "line": "l",
+        }.get(kind, "obj")
+        return f"{prefix}{n}"
+
+    def _upsert_object(self, obj: Dict[str, Any]) -> None:
+        name = obj.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return
+        self.objects_by_name[name] = obj
+
+    def _delete_object(self, name: str) -> bool:
+        if name in self.objects_by_name:
+            self.objects_by_name.pop(name, None)
+            self.point_coords.pop(name, None)
+            return True
+        return False
+
+    def apply_command(self, command: str) -> Tuple[Dict[str, Any], List[str], List[str]]:
+        cmd = command.strip()
+        created: List[str] = []
+        deleted: List[str] = []
+
+        # Delete(Object) / Delete[Object]
+        low = cmd.lower()
+        if low.startswith("delete(") or low.startswith("delete["):
+            close = ")" if low.startswith("delete(") else "]"
+            inside = cmd[cmd.find("(" if close == ")" else "[") + 1 : cmd.rfind(close)]
+            for part in inside.split(","):
+                name = part.strip()
+                if name and self._delete_object(name):
+                    deleted.append(name)
+            return ({"command": command, "ok": True, "labels": None, "error": None}, created, deleted)
+
+        label = _extract_assignment_label(cmd)
+        rhs = cmd.split("=", 1)[1].strip() if "=" in cmd else cmd
+        obj_type = _infer_object_type(cmd)
+
+        if not label and obj_type:
+            label = self._next_auto_label(obj_type)
+
+        labels: List[str] | None = None
+        if label and obj_type:
+            visible = True
+            value_string: str | None = None
+
+            if obj_type == "point":
+                coords = _parse_point_coords(rhs)
+                if coords is None:
+                    coords = _try_eval_point(rhs, self.point_coords)
+                if coords is not None:
+                    self.point_coords[label] = coords
+                    x, y = coords
+                    value_string = f"{label} = ({x:.1f}, {y:.1f})"
+
+            if obj_type == "polygon":
+                tokens = re.findall(r"[A-Za-z][A-Za-z0-9_]*", rhs)
+                verts = [t for t in tokens[1:]] if tokens else []
+                pts: list[tuple[float, float]] = []
+                for v in verts[:12]:
+                    if v in self.point_coords:
+                        pts.append(self.point_coords[v])
+                if len(pts) >= 3:
+                    area = _polygon_area(pts)
+                    value_string = f"{label} = {area:.1f}"
+
+            self._upsert_object(
+                {
+                    "name": label,
+                    "type": obj_type,
+                    "visible": visible,
+                    "valueString": value_string,
+                    "definitionString": cmd,
+                    "commandString": cmd,
+                }
+            )
+            created.append(label)
+            labels = [label]
+
+        return ({"command": command, "ok": True, "labels": labels, "error": None}, created, deleted)
+
+    def exec_commands(self, commands: List[str]) -> Dict[str, Any]:
+        results: List[Dict[str, Any]] = []
+        created_all: List[str] = []
+        deleted_all: List[str] = []
+
         for cmd in commands:
-            # simple parsing: "Name = Type(...)"
-            if "=" in cmd:
-                name = cmd.split("=", 1)[0].strip()
-                self.objects.append({"name": name, "definition": cmd})
-                created.append(name)
-        return created
+            res, created, deleted = self.apply_command(cmd)
+            results.append(res)
+            created_all.extend(created)
+            deleted_all.extend(deleted)
+
+        return {
+            "results": results,
+            "created_objects": created_all,
+            "deleted_objects": deleted_all,
+            "rolled_back_objects": None,
+            "rollback_errors": None,
+            "dialogs": None,
+            "preset_applied": "geometry",
+            "quality_warnings": None,
+        }
 
 # --- API Client ---
 
@@ -314,6 +515,45 @@ Evaluate if the AI followed the rubric.
 
 # --- Runner Logic ---
 
+def extract_final_explanation(data: Any) -> str:
+    """Extract assistant explanation text from a v2 SSE 'final' payload.
+
+    Current v2 shape:
+      {"answer": {"explanation": "...", "overlay_text": ...}}
+    """
+
+    if isinstance(data, str):
+        return data.strip()
+
+    if not isinstance(data, dict):
+        return ""
+
+    answer = data.get("answer")
+    if isinstance(answer, dict):
+        explanation = answer.get("explanation")
+        if isinstance(explanation, str) and explanation.strip():
+            return explanation.strip()
+        content = answer.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+    # Legacy / experimental shapes.
+    output = data.get("output")
+    if isinstance(output, str) and output.strip():
+        return output.strip()
+    if isinstance(output, dict):
+        for k in ("content", "explanation", "text"):
+            v = output.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+
+    text = data.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    return ""
+
+
 def run_single_eval(case: Dict[str, Any], config: EvalConfig) -> Dict[str, Any]:
     """Runs a single test case through the API and asserts results."""
     
@@ -359,14 +599,10 @@ def run_single_eval(case: Dict[str, Any], config: EvalConfig) -> Dict[str, Any]:
                     interrupt = ev["data"]
                 elif ev["event"] == "run_start":
                     run_id = ev["data"].get("run_id")
-                elif ev["event"] == "final": # Assuming v2 protocol emits 'final' event with text
-                    # Depending on protocol, might be in 'final' or aggregated from deltas.
-                    # V2 spec says final event has { "output": ... }
-                    if isinstance(ev["data"], dict) and "output" in ev["data"]:
-                         # Check if output is string or object with content
-                         out = ev["data"]["output"]
-                         if isinstance(out, str): trace["final_text"] = out
-                         elif isinstance(out, dict): trace["final_text"] = out.get("content", "")
+                elif ev["event"] == "final":
+                    extracted = extract_final_explanation(ev["data"])
+                    if extracted:
+                        trace["final_text"] = extracted
                 elif ev["event"] == "run_end":
                     pass
 
@@ -384,10 +620,10 @@ def run_single_eval(case: Dict[str, Any], config: EvalConfig) -> Dict[str, Any]:
             output = {"stub": True}
             if tool_name == "exec_geogebra_commands":
                 cmds = tool_input.get("commands", [])
-                canvas.apply_commands(cmds)
-                output = {"results": [{"ok": True} for _ in cmds]}
+                cmd_list = [c for c in cmds if isinstance(c, str)] if isinstance(cmds, list) else []
+                output = canvas.exec_commands(cmd_list)
             elif tool_name == "get_canvas_state":
-                output = {"objects": canvas.objects}
+                output = {"objects": canvas.snapshot_objects()}
                 
             # Resume
             current_url = f"{config.base_url}/api/threads/{thread_id}/runs/{run_id}/resume"
