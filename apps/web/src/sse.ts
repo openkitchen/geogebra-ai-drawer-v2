@@ -12,7 +12,7 @@ export type RunStreamEvent =
     }
   | { event: 'node_start'; data: { name: string } }
   | { event: 'plan_update'; data: { plan: Array<{ id: string; text: string; done?: boolean }> } }
-  | { event: 'token'; data: { text_delta: string } }
+  | { event: 'token'; data: { text_delta: string; channel?: 'content' | 'reasoning' | 'meta' } }
   | { event: 'tool_start'; data: { tool_name: string; tool_call_id: string; input: unknown } }
   | { event: 'interrupt'; data: { kind: 'frontend_tool'; tool_name: string; tool_call_id: string; input: unknown } }
   | { event: 'tool_end'; data: { tool_name: string; tool_call_id: string; output: unknown; ok: boolean; error?: unknown } }
@@ -85,7 +85,20 @@ export async function* streamSse(response: Response): AsyncGenerator<RunStreamEv
       if (!msg.event || msg.data == null) continue;
       try {
         const parsed = JSON.parse(msg.data) as unknown;
-        yield { event: msg.event as RunStreamEvent['event'], data: parsed as any } as RunStreamEvent;
+        const ev = { event: msg.event as RunStreamEvent['event'], data: parsed as any } as RunStreamEvent;
+        yield ev;
+
+        // Important: some servers keep the SSE connection open even after `run_end`.
+        // If we don't proactively stop, the UI can get stuck in `busy=true`,
+        // which disables the send button ("paper plane") forever.
+        if (ev.event === 'run_end') {
+          try {
+            await reader.cancel();
+          } catch {
+            // Ignore cancel errors.
+          }
+          return;
+        }
       } catch {
         // Ignore non-JSON payloads in v2.
       }

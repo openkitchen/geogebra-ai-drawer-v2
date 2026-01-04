@@ -34,14 +34,8 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
     return tools.length > 0 ? `Tools: ${tools.join(', ')}` : null;
   }, [events]);
 
-  const thoughtProcess = useMemo(() => {
-    if (!events || events.length === 0) return '';
-    const thoughts = events
-      .filter(e => e.event === 'token' || e.event === 'plan_update')
-      .map(e => e.event === 'token' ? e.data.text_delta : '[Plan Update]')
-      .join('');
-    return thoughts.length > 50 ? thoughts.slice(0, 50) + '...' : thoughts;
-  }, [events]);
+  // NOTE: we intentionally do NOT render token streams in the UI right now.
+  // Use server-side logs (logs/v2/run-*.jsonl) for debugging raw provider deltas.
 
   if (isUser) {
     return (
@@ -102,7 +96,21 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {events.map((ev, idx) => {
-                        if (ev.event === 'token') return null; // Skip raw tokens to reduce noise
+                        // Show token events in dev mode (collapsed by default)
+                        if (ev.event === 'token') {
+                          const channel = ev.data.channel ?? 'content';
+                          const len = ev.data.text_delta?.length ?? 0;
+                          return (
+                            <details key={idx} style={{ fontSize: 10 }}>
+                              <summary style={{ cursor: 'pointer', color: '#64748b' }}>
+                                [token:{channel}] len={len}
+                              </summary>
+                              <div style={{ marginTop: 4, padding: 4, background: '#f8fafc', borderRadius: 4, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                                (hidden)
+                              </div>
+                            </details>
+                          );
+                        }
                         return (
                           <div key={idx} style={{ fontFamily: 'monospace', color: '#334155' }}>
                             <span style={{ color: '#94a3b8', marginRight: 6 }}>[{ev.event}]</span>
@@ -126,6 +134,7 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
         )}
 
         <div className="content">
+          {/* Show final answer */}
           {message.text ? (
             <div style={{ whiteSpace: 'pre-wrap' }}>{message.text}</div>
           ) : null}

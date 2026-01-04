@@ -1,5 +1,7 @@
 # 任务看板（单一来源）
 
+> ⚠️ 已弃用：任务跟踪已迁移到 `bd`（beads）。本文件仅保留 v2 启动期历史记录，请勿继续更新。
+
 字段：`ID | Title | Owner | Status | DependsOn | LastUpdated | Notes`
 
 - Owner: codex-A / codex-B / wei

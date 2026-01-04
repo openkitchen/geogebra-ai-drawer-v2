@@ -64,6 +64,10 @@ export function GeoGebraApplet({ className, onAppletReady }: GeoGebraAppletProps
 
         if (!window.GGBApplet) throw new Error('GeoGebra script loaded but GGBApplet is not available');
 
+        // Some GeoGebra builds occasionally call `appletOnLoad` with a falsy/undefined api.
+        // Keep a reference to the injected applet instance so we can retrieve the API object.
+        let injectedApplet: any = null;
+
         // Robust Configuration:
         // 1. Explicit dimensions (width/height) matching container
         // 2. No 'autoHeight' or 'scaleContainerClass' to avoid conflict with manual sizing
@@ -85,22 +89,35 @@ export function GeoGebraApplet({ className, onAppletReady }: GeoGebraAppletProps
           autoHeight: false, // Disable auto-height
           appletOnLoad: (api) => {
             if (cancelled) return;
+            const candidate: any =
+              api ??
+              injectedApplet?.getAppletObject?.() ??
+              (window as any)[appletId] ??
+              (window as any).ggbApplet;
+
+            // Validate we got something that looks like the GeoGebra API.
+            if (!candidate || typeof candidate.getAllObjectNames !== 'function') {
+              setStatus('error');
+              setError('GeoGebra loaded but API is not available');
+              return;
+            }
+
             setStatus('ready');
-            appletRef.current = api;
+            appletRef.current = candidate as GeoGebraAppletApi;
             
             // Set smaller font size for "compact" look
             try {
-              if (api.setGlobalFontSize) api.setGlobalFontSize(12);
+              if (candidate.setGlobalFontSize) candidate.setGlobalFontSize(12);
             } catch (e) {
               console.warn('Failed to set font size', e);
             }
 
-            onAppletReady?.(api);
+            onAppletReady?.(candidate as GeoGebraAppletApi);
           },
         };
 
-        const applet = new window.GGBApplet(params, true);
-        applet.inject(host);
+        injectedApplet = new window.GGBApplet(params, true);
+        injectedApplet.inject(host);
       } catch (e) {
         if (cancelled) return;
         const message = e instanceof Error ? e.message : String(e);

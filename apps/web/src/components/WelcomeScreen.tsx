@@ -1,13 +1,13 @@
 interface WelcomeScreenProps {
-  onSuggestionClick: (text: string) => void;
+  onSuggestionClick: (text: string, intentHint?: Record<string, unknown>) => void;
 }
 
 export function WelcomeScreen({ onSuggestionClick }: WelcomeScreenProps) {
-  const suggestions = [
-    "Draw a circle with radius 3 at (0,0)",
-    "Plot y = sin(x)",
-    "Draw a triangle ABC",
-    "Construct the perpendicular bisector of AB"
+  const suggestions: Array<{ text: string; intentHint?: Record<string, unknown> }> = [
+    { text: "Draw a circle with radius 3 at (0,0)", intentHint: { wants_draw: true, wants_circle: true } },
+    { text: "Plot y = sin(x)", intentHint: { wants_draw: true } },
+    { text: "Draw a triangle ABC", intentHint: { wants_draw: true, wants_triangle: true } },
+    { text: "Construct the perpendicular bisector of AB", intentHint: { wants_draw: true } },
   ];
 
   return (
@@ -31,9 +31,9 @@ export function WelcomeScreen({ onSuggestionClick }: WelcomeScreenProps) {
           <button 
             key={i} 
             className="suggestion-chip"
-            onClick={() => onSuggestionClick(s)}
+            onClick={() => onSuggestionClick(s.text, s.intentHint)}
           >
-            {s}
+            {s.text}
           </button>
         ))}
       </div>

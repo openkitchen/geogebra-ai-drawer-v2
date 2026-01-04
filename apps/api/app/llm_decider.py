@@ -67,6 +67,25 @@ def _preview_text(value: Any, *, limit: int = 320) -> str | None:
     return s if len(s) <= limit else (s[:limit] + "…")
 
 
+_SINGLE_FENCED_BLOCK_RE = re.compile(r"^```([^\r\n]*)\r?\n([\s\S]*?)\r?\n```$")
+
+
+def _unwrap_single_fenced_block(text: str) -> tuple[str, dict[str, Any] | None]:
+    """If the entire string is a single fenced code block (e.g. ```plaintext ... ```), unwrap it.
+
+    Our web UI currently renders plain text (not Markdown), so showing fences literally is noisy.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return raw, None
+    m = _SINGLE_FENCED_BLOCK_RE.match(raw)
+    if not m:
+        return text, None
+    lang = (m.group(1) or "").strip().lower() or None
+    body = (m.group(2) or "").strip()
+    return body, {"kind": "fence_unwrap", "lang": lang}
+
+
 def _trace_llm_event(*, run_id: str | None, ui_debug: bool, name: str, data: dict[str, Any]) -> None:
     if not run_id:
         return
@@ -917,7 +936,9 @@ def generate_geogebra_commands(
 
         def invoke_structured(messages: list[Any]) -> ExecGeogebraCommandsInput | None:
             try:
-                result = structured.invoke(messages, config=_build_runnable_config(run_id=run_id, op="command_gen", role=role))
+                result = structured.invoke(
+                    messages, config=_build_runnable_config(run_id=run_id, op="command_gen", role=role)
+                )
             except Exception as e:
                 if run_id:
                     trace_exception(
@@ -1117,6 +1138,11 @@ def generate_final_answer(
             )
             continue
 
+        # If the model wraps the whole reply in ```plaintext``` (or similar), unwrap it so the UI
+        # doesn't show the fences literally.
+        raw_text = text
+        text, unwrap_info = _unwrap_single_fenced_block(text)
+
         took_ms = int((time.time() - t0) * 1000)
         _trace_llm_event(
             run_id=run_id,
@@ -1126,6 +1152,8 @@ def generate_final_answer(
                 "role": role,
                 "took_ms": took_ms,
                 "text_preview": _preview_text(text, limit=320),
+                "raw_text_preview": _preview_text(raw_text, limit=320) if unwrap_info else None,
+                "unwrap": unwrap_info,
                 "usage": _extract_usage_metadata(msg),
             },
         )

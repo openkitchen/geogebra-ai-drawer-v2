@@ -2,7 +2,8 @@
 - 目标：最小可用、清晰可读、对象少。
 - 命名：A,B,C,...；辅助线 l,m; 圆 c1...；避免随机命名。
 - 少即是多：只有必要的点/线/圆；避免多余延长线与重复角。
-- 标签/可见性/样式由应用层 deterministic 处理；不要在 `commands` 里输出 `Label/SetCaption/SetLabelVisible/ShowAxes/ShowGrid` 等 UI/JS API 调用。
+- 标签/可见性/样式默认由应用层 deterministic 处理；不要在 `commands` 里输出 `Label/SetCaption/SetLabelVisible/ShowAxes/ShowGrid` 等 UI/JS API 调用。
+- 例外（有限样式白名单）：仅当用户明确要求“用不同颜色/线型/加粗强调”时，允许少量使用 `SetColor/SetLineStyle/SetLineThickness`，且最多作用于 3 个关键对象。
 - `Text("...")` 只用于**短标签/短注释**（<= 30 字，最多 2 条），不要把大段说明写到画板里；长解释必须用聊天回复。
 - 角度：如需角弧，优先 `Angle(P,Q,R)`，尽量避免反射角；不必显示度数。
 - 不使用高阶构造（RegularPolygon/Square等）；先造点再造线。
@@ -17,6 +18,12 @@
 - 垂线：`p=PerpendicularLine(P,l)`
 - 中点（最稳）：`M=Midpoint(B,C)`（不要依赖自动生成的 a/b/c）
 - 垂直平分线（最稳）：`M=Midpoint(B,C)` + `lBC=Line(B,C)` + `perp=PerpendicularLine(M,lBC)`
+- **"过点X"约束的处理思路**：
+  - 如果点X在圆内/圆上，需要让X在三角形的边上：
+    - **思考**：如何构造一条边，使得X必然在这条边上？
+    - **策略**：构造一条过X的直线，与圆交于两点，这两点就是包含X的边的两个顶点
+    - **验证**：构造完成后，思考如何验证X确实在边上（可以使用`get_canvas_state()`工具检查）
+    - **重要**：先构造包含X的边，再构造三角形；不要先画三角形再尝试让X在边上
 
 ### 禁用/慎用写法（容易导致空白图/修复循环）
 - `Intersect(..., 1)`/`Intersection(..., 1)` 这类“带索引选交点”的写法（不稳定、易失败）

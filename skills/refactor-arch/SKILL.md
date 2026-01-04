@@ -25,7 +25,6 @@ Default behavior: **diagnose + document + task-list only**. Do not change code u
 - `docs/spec/runtime-feedback-repair.md`
 - `docs/spec/model-routing.md`
 - `docs/self-test.md`
-- `docs/collaboration/todo.md`
 - `docs/collaboration/decision-log.md`
 
 2) Key implementation hotspots (sample, expand only if needed)
@@ -74,7 +73,7 @@ Each finding must include:
 ### Step 4: Output a prioritized refactor list (decision-ready)
 
 Create a table ordered by priority (P0/P1/P2):
-- ID (next free task IDs from `docs/collaboration/todo.md`)
+- ID (bd issue IDs you create for the work)
 - Title
 - Problem
 - Recommendation
@@ -83,14 +82,14 @@ Create a table ordered by priority (P0/P1/P2):
 - DependsOn
 - Validation (“自测” checklist items + `npm run build`)
 
-### Step 5: Write artifacts + update todo board
+### Step 5: Write artifacts + create bd issues
 
 1) Write/update report:
 - `docs/design/refactor-arch-report-YYYY-MM-DD.md`
 
 2) Update tasks:
-- Add/update items in `docs/collaboration/todo.md` (single source of truth)
-- Keep titles short, and include DependsOn + validation notes.
+- Create/update bd issues (single source of truth).
+- Keep titles short, and include dependencies + validation notes.
 
 ### Step 6: Ask for decisions (before touching code)
 
@@ -105,4 +104,3 @@ Before any refactor implementation, ask the user to choose:
 - Prefer contract/versioning/typing work before file-splitting refactors.
 - Avoid adding special-case if/else for specific scenarios; prefer prompts/tools/contracts.
 - After any implementation work (only when requested): run “自主测试” + `npm run build`, then commit.
-

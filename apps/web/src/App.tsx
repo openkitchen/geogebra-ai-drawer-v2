@@ -86,14 +86,31 @@ export default function App() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      void send();
+      const textarea = e.currentTarget as HTMLTextAreaElement;
+      const text = textarea.value.trim();
+      console.log('[handleKeyDown] Enter pressed, textarea.value=' + text);
+      if (text) {
+        void send(text);
+      }
     }
   };
 
-  async function send(textOverride?: string) {
+  async function send(textOverride?: string, intentHint?: Record<string, unknown>) {
     const userText = (textOverride ?? input).trim();
-    if (!userText || busy) return;
-    if (!ggbApi) return;
+    console.log('[send] called:', 'textOverride=' + (textOverride || '(undefined)'), 'input=' + input, 'userText=' + userText);
+    if (!userText) {
+      console.log('[send] blocked: empty text');
+      return;
+    }
+    if (busy) {
+      console.log('[send] blocked: busy');
+      return;
+    }
+    if (!ggbApi) {
+      console.warn('[send] blocked: ggbApi not ready yet');
+      return;
+    }
+    console.log('[send] sending:', userText);
     
     setInput('');
     // Reset textarea height if we had auto-grow logic (not strictly needed with fixed styles but good practice)
@@ -109,7 +126,9 @@ export default function App() {
     ]);
 
     try {
-      const effectiveThreadId = threadId ?? (await createThreadId());
+      // In dev, the API server can hot-reload and lose in-memory threads, which causes 404s.
+      // Recover by creating a new thread and retrying once.
+      let effectiveThreadId = threadId ?? (await createThreadId());
       if (!threadId) setThreadId(effectiveThreadId);
 
       let runId: string | null = null;
@@ -168,42 +187,61 @@ export default function App() {
           for await (const ev of streamSse(res)) {
             if (ev.event === 'run_start') {
               runId = ev.data.run_id;
+              console.log('[consume] run_start, runId=', runId);
             }
-            if (ev.event === 'interrupt') pendingInterrupt = ev;
+            if (ev.event === 'interrupt') {
+              pendingInterrupt = ev;
+              console.log('[consume] interrupt received:', ev.data);
+            }
             appendEvent(ev);
           }
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
+          console.error('[consume] error:', message);
           appendEvent({ event: 'client_error', data: { at: 'sse', status: 0, statusText: message } });
           throw e;
         }
+        console.log('[consume] done, pendingInterrupt=', pendingInterrupt ? 'yes' : 'no');
         return pendingInterrupt;
       }
 
-      let pendingInterrupt = await consume(
-        await fetch(`/api/threads/${effectiveThreadId}/runs/stream`, {
+      const makeRunsStreamRequest = (tid: string) =>
+        fetch(`/api/threads/${tid}/runs/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             input: { user_text: userText },
-            ui_context: { locale: 'zh-CN', debug: devMode, plan_mode: devMode }, // Plan is for developer timeline
+            ui_context: { locale: 'zh-CN', debug: devMode, plan_mode: devMode, intent_hint: intentHint ?? null }, // Plan is for developer timeline
           }),
-        }),
-        'runs_stream',
-      );
+        });
+
+      let res = await makeRunsStreamRequest(effectiveThreadId);
+      if (res.status === 404) {
+        console.warn('[send] thread not found (404), creating a new thread and retrying once');
+        effectiveThreadId = await createThreadId();
+        setThreadId(effectiveThreadId);
+        res = await makeRunsStreamRequest(effectiveThreadId);
+      }
+
+      let pendingInterrupt = await consume(res, 'runs_stream');
 
       while (pendingInterrupt) {
+        console.log('[send] processing interrupt:', pendingInterrupt.data);
         if (!runId) throw new Error('Missing run_id before interrupt');
 
         const cacheKey = pendingInterrupt.data.tool_call_id;
         let toolResult = toolResultCache.get(cacheKey);
         if (!toolResult) {
+          console.log('[send] executing tool:', pendingInterrupt.data.tool_name);
           toolResult = await runFrontendTool({
             toolName: pendingInterrupt.data.tool_name,
             input: pendingInterrupt.data.input,
             ggbApi,
           });
+          console.log('[send] tool result:', toolResult.ok ? 'ok' : 'error');
           toolResultCache.set(cacheKey, toolResult);
+        } else {
+          console.log('[send] using cached tool result');
         }
 
         const resumePayload = {
@@ -285,7 +323,7 @@ export default function App() {
         <div className="chatPane">
           <div className="messages" ref={messagesRef}>
             {messages.length === 0 ? (
-              <WelcomeScreen onSuggestionClick={(text) => send(text)} />
+              <WelcomeScreen onSuggestionClick={(text, hint) => send(text, hint)} />
             ) : (
               messages.map((m) => (
                 <ChatBubble 
@@ -298,26 +336,41 @@ export default function App() {
           </div>
 
           <div className="composer-area">
-             <div className="input-wrapper">
+             <form 
+               className="input-wrapper"
+               onSubmit={(e) => {
+                 e.preventDefault();
+                 const textarea = textareaRef.current;
+                 const text = textarea ? textarea.value.trim() : input.trim();
+                 console.log('[form onSubmit]', { textarea: !!textarea, textareaValue: textarea?.value, input, text });
+                 if (text) {
+                   void send(text);
+                 }
+               }}
+             >
                <textarea
                  ref={textareaRef}
                  className="chat-input"
                  value={input}
                  placeholder={ggbApi ? '描述你想画的图形...' : '等待画板加载...'}
                  onChange={(e) => setInput(e.target.value)}
+                // Some IME/composition paths can fail to update React state promptly via onChange.
+                // Keep state in sync so the send button becomes enabled as the user types.
+                onInput={(e) => setInput((e.target as HTMLTextAreaElement).value)}
+                onCompositionEnd={(e) => setInput(e.currentTarget.value)}
                  onKeyDown={handleKeyDown}
                  rows={1}
                />
                <button 
+                 type="submit"
                  className="send-btn" 
-                 onClick={() => void send()} 
                  disabled={!ggbApi || busy || !input.trim()}
                >
                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                  </svg>
                </button>
-             </div>
+             </form>
           </div>
         </div>
 

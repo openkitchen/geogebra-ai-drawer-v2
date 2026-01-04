@@ -4,6 +4,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
+import threading
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, Response
@@ -14,7 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 from .debug_trace import trace_exception, trace_http, trace_sse
 from .llm_decider import load_llm_config
 from .protocol_v2 import PROTOCOL_VERSION, ToolResumePayload, get_protocol_schema_v2
-from .runtime_graph import graph_local as graph
+from .graph.graph import graph_local as graph
 
 
 @dataclass
@@ -52,6 +53,9 @@ class UIContext(BaseModel):
     locale: str = "zh-CN"
     debug: bool = False
     plan_mode: bool = True
+    # Optional structured hint from the UI (NOT derived from text parsing).
+    # This is useful for suggestion chips and other deterministic UI actions.
+    intent_hint: dict[str, Any] | None = None
 
 
 class RunStreamRequest(BaseModel):
@@ -252,53 +256,99 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
             "ui_debug": ui_debug,
             "plan_mode": bool(body.ui_context.plan_mode),
             "user_text": body.input.user_text,
+            "intent_hint": body.ui_context.intent_hint,
             "tool_calls_used": run.tool_calls_used,
             "tool_calls_limit": run.tool_calls_limit,
             "model_calls_used": run.model_calls_used,
             "model_calls_limit": run.model_calls_limit,
         }
-        interrupt_value: Optional[dict] = None
-        answer_text: Optional[str] = None
-        try:
-            interrupts_seen = False
-            plan_sent = False
-            for chunk in graph.stream(input_state, config):
-                interrupts = chunk.get("__interrupt__")
-                if interrupts and not interrupts_seen:
-                    # IMPORTANT: do not break early. Let the LangGraph stream generator
-                    # finish gracefully so GeneratorExit is not reported as an error in tracing.
-                    interrupt_value = interrupts[0].value
-                    interrupts_seen = True
-                    continue
-                if interrupts_seen:
-                    continue
-                for node_name in ("ingest_node", "plan_node", "act_node", "finalize_node"):
-                    node_out = chunk.get(node_name)
-                    if not isinstance(node_out, dict):
+        # Run graph in a background thread so we can stream token events in real-time.
+        from .llm.token_events import get_token_manager
+        token_manager = get_token_manager()
+
+        loop = asyncio.get_running_loop()
+        sse_q: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+        def _emit(event: str, data: Any) -> None:
+            # Schedule the queue push in the event loop thread.
+            loop.call_soon_threadsafe(sse_q.put_nowait, (event, data))
+
+        def _send_token(payload: dict) -> None:
+            # payload: {"text_delta": str, "channel"?: "content"|"reasoning"|"meta"}
+            _emit("token", payload)
+
+        token_manager.register_callback(run_id, _send_token)
+
+        def _run_graph_worker() -> None:
+            interrupt_value: Optional[dict] = None
+            answer_text: Optional[str] = None
+            try:
+                interrupts_seen = False
+                plan_sent = False
+                for chunk in graph.stream(input_state, config):
+                    interrupts = chunk.get("__interrupt__")
+                    if interrupts and not interrupts_seen:
+                        # IMPORTANT: do not break early. Let the LangGraph stream generator
+                        # finish gracefully so GeneratorExit is not reported as an error in tracing.
+                        interrupt_value = interrupts[0].value
+                        interrupts_seen = True
+                        continue
+                    if interrupts_seen:
                         continue
 
-                    if node_name == "plan_node" and not plan_sent:
-                        plan = node_out.get("plan")
-                        if isinstance(plan, list) and plan:
-                            plan_payload = {"plan": plan}
-                            trace_sse(run_id=run_id, ui_debug=ui_debug, event="plan_update", data=plan_payload)
-                            yield _sse("plan_update", plan_payload)
-                            plan_sent = True
+                    for node_name in ("ingest_node", "plan_node", "act_node", "finalize_node"):
+                        node_out = chunk.get(node_name)
+                        if not isinstance(node_out, dict):
+                            continue
 
-                    if "model_calls_used" in node_out:
-                        try:
-                            run.model_calls_used = int(node_out["model_calls_used"])
-                        except Exception:
-                            pass
-                    if "model_calls_limit" in node_out:
-                        try:
-                            run.model_calls_limit = int(node_out["model_calls_limit"])
-                        except Exception:
-                            pass
-                    if isinstance(node_out.get("answer_text"), str):
-                        answer_text = node_out["answer_text"]
-        except Exception as e:
-            trace_exception(run_id=run_id, ui_debug=ui_debug, where="graph.stream(runs_stream)", exc=e)
+                        if node_name == "plan_node" and not plan_sent:
+                            plan = node_out.get("plan")
+                            if isinstance(plan, list) and plan:
+                                _emit("plan_update", {"plan": plan})
+                                plan_sent = True
+
+                        if "model_calls_used" in node_out:
+                            try:
+                                run.model_calls_used = int(node_out["model_calls_used"])
+                            except Exception:
+                                pass
+                        if "model_calls_limit" in node_out:
+                            try:
+                                run.model_calls_limit = int(node_out["model_calls_limit"])
+                            except Exception:
+                                pass
+                        if isinstance(node_out.get("answer_text"), str):
+                            answer_text = node_out["answer_text"]
+            except Exception as e:
+                _emit("__done__", {"error": str(e)})
+                return
+
+            _emit("__done__", {"interrupt_value": interrupt_value, "answer_text": answer_text})
+
+        threading.Thread(target=_run_graph_worker, daemon=True).start()
+
+        done: dict[str, Any] | None = None
+        try:
+            while True:
+                event, data = await sse_q.get()
+                if event == "__done__":
+                    done = data
+                    break
+                trace_sse(run_id=run_id, ui_debug=ui_debug, event=event, data=data)
+                yield _sse(event, data)
+        finally:
+            token_manager.unregister_callback(run_id)
+
+        if done is None:
+            done = {"error": "missing_done"}
+
+        if done.get("error"):
+            trace_exception(
+                run_id=run_id,
+                ui_debug=ui_debug,
+                where="graph.stream(runs_stream)",
+                exc=RuntimeError(str(done.get("error"))),
+            )
             final_payload = {
                 "answer": {
                     "explanation": "服务端运行时出错了（已记录日志）。请把该条消息的 Debug events 发给我，我来修复。",
@@ -311,6 +361,9 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
             yield _sse("run_end", {})
             _runs.pop(run_id, None)
             return
+
+        interrupt_value = done.get("interrupt_value")
+        answer_text = done.get("answer_text")
 
         if interrupt_value is None:
             final_payload = {
@@ -451,39 +504,75 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
         await asyncio.sleep(0.05)
 
         config = {"configurable": {"thread_id": thread_id}}
-        interrupt_value: Optional[dict] = None
-        answer_text: Optional[str] = None
-        try:
-            interrupts_seen = False
-            for chunk in graph.stream(Command(resume=resume.model_dump()), config):
-                interrupts = chunk.get("__interrupt__")
-                if interrupts and not interrupts_seen:
-                    # IMPORTANT: do not break early. Let the LangGraph stream generator
-                    # finish gracefully so GeneratorExit is not reported as an error in tracing.
-                    interrupt_value = interrupts[0].value
-                    interrupts_seen = True
-                    continue
-                if interrupts_seen:
-                    continue
+        from .llm.token_events import get_token_manager
+        token_manager = get_token_manager()
 
-                for node_name in ("act_node", "finalize_node"):
-                    node_out = chunk.get(node_name)
-                    if not isinstance(node_out, dict):
+        loop = asyncio.get_running_loop()
+        sse_q: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+        def _emit(event: str, data: Any) -> None:
+            loop.call_soon_threadsafe(sse_q.put_nowait, (event, data))
+
+        def _send_token(payload: dict) -> None:
+            _emit("token", payload)
+
+        token_manager.register_callback(run_id, _send_token)
+
+        def _run_graph_worker() -> None:
+            interrupt_value: Optional[dict] = None
+            answer_text: Optional[str] = None
+            try:
+                interrupts_seen = False
+                for chunk in graph.stream(Command(resume=resume.model_dump()), config):
+                    interrupts = chunk.get("__interrupt__")
+                    if interrupts and not interrupts_seen:
+                        interrupt_value = interrupts[0].value
+                        interrupts_seen = True
                         continue
-                    if "model_calls_used" in node_out:
-                        try:
-                            run.model_calls_used = int(node_out["model_calls_used"])
-                        except Exception:
-                            pass
-                    if "model_calls_limit" in node_out:
-                        try:
-                            run.model_calls_limit = int(node_out["model_calls_limit"])
-                        except Exception:
-                            pass
-                    if isinstance(node_out.get("answer_text"), str):
-                        answer_text = node_out["answer_text"]
-        except Exception as e:
-            trace_exception(run_id=run_id, ui_debug=ui_debug, where="graph.stream(resume)", exc=e)
+                    if interrupts_seen:
+                        continue
+
+                    for node_name in ("act_node", "finalize_node"):
+                        node_out = chunk.get(node_name)
+                        if not isinstance(node_out, dict):
+                            continue
+                        if "model_calls_used" in node_out:
+                            try:
+                                run.model_calls_used = int(node_out["model_calls_used"])
+                            except Exception:
+                                pass
+                        if "model_calls_limit" in node_out:
+                            try:
+                                run.model_calls_limit = int(node_out["model_calls_limit"])
+                            except Exception:
+                                pass
+                        if isinstance(node_out.get("answer_text"), str):
+                            answer_text = node_out["answer_text"]
+            except Exception as e:
+                _emit("__done__", {"error": str(e)})
+                return
+
+            _emit("__done__", {"interrupt_value": interrupt_value, "answer_text": answer_text})
+
+        threading.Thread(target=_run_graph_worker, daemon=True).start()
+
+        done: dict[str, Any] | None = None
+        try:
+            while True:
+                event, data = await sse_q.get()
+                if event == "__done__":
+                    done = data
+                    break
+                trace_sse(run_id=run_id, ui_debug=ui_debug, event=event, data=data)
+                yield _sse(event, data)
+        finally:
+            token_manager.unregister_callback(run_id)
+
+        if done is None:
+            done = {"error": "missing_done"}
+
+        if done.get("error"):
+            trace_exception(run_id=run_id, ui_debug=ui_debug, where="graph.stream(resume)", exc=RuntimeError(str(done.get("error"))))
             final_payload = {
                 "answer": {
                     "explanation": "服务端在 resume 过程中出错了（已记录日志）。请把该条消息的 Debug events 发给我，我来修复。",
@@ -496,6 +585,9 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
             yield _sse("run_end", {})
             _runs.pop(run_id, None)
             return
+
+        interrupt_value = done.get("interrupt_value")
+        answer_text = done.get("answer_text")
 
         if interrupt_value is not None:
             run.pending_tool = PendingTool(

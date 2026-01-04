@@ -2,7 +2,7 @@
 
 > 决策记录：本目录是 **v2 独立 worktree**（LangGraph/LangChain Python 重构，允许破坏兼容）。  
 > v1 目录保留在：`/Users/wei/workspaces/openkitchen/geogebra-ai-drawer`。  
-> 协作约定：请默认只在本目录推进 v2；涉及跨版本共用的决策/规范，写入 `docs/collaboration/decision-log.md` 并在 `docs/collaboration/todo.md` 跟踪。
+> 协作约定：请默认只在本目录推进 v2；涉及跨版本共用的决策/规范，写入 `docs/collaboration/decision-log.md` 并用 `bd` 跟踪（团队模式：`.beads/issues.jsonl` 进 git）。
 
 > 并行开发指南：协作规则与最小必读清单，保持 300 字内便于快速上手。
 
@@ -37,10 +37,10 @@
 - 测试重点：新/改功能的主路径、最近问题的复现用例、关键工具调用是否触发（toolCalls）、返回字段完整性。
 
 ## 并行开发流程
-- 任务看板：`docs/collaboration/todo.md` 是唯一任务源，字段：ID | Title | Owner | Status | DependsOn | LastUpdated | Notes。
-- 领取规则：开始前先认领/更新状态；若发现设计冲突，用 `Status: blocked` + Blocker 说明。
-- 日更节奏：每日提交前同步 `LastUpdated`，重要决定写入 `docs/collaboration/decision-log.md`。
-- 协作手册：详见 `docs/collaboration/parallel-dev.md`（含冲突解决、分支命名、手动合并顺序）。
+- 任务系统：使用 **bd（beads）** 作为唯一任务源（团队模式：`.beads/issues.jsonl` 进 git；收尾必须 `bd sync`）。
+- 多 agent 身份：每个 agent/终端建议设置 `BD_ACTOR=<agent_name>`；任务用 `--assignee <agent_name>` 归属。
+- 并行改代码：建议每个 agent 使用独立 worktree 目录（避免互相覆盖/冲突），用 `bd worktree create` 管理。
+- 决策记录：高影响决策写入 `docs/collaboration/decision-log.md`；对应落地任务写入 bd。
 
 ## 构建与测试
 - v2（规划）：
@@ -55,8 +55,30 @@
 ## 提交与 PR
 - 建议 Conventional Commits（例：`feat: add commandbook lookup`）。
 - PR 需包含：变更摘要、触及文档/自测条目、运行的命令与结果、截图（UI 变更）。
-- 禁止提交 `.env*`、`node_modules/`；合并前确认 todo 状态已更新。
+- 禁止提交 `.env*`、`node_modules/`；合并前确认相关 bd issue 已更新（status/notes）。
 
 ## 环境与安全
 - `.env.local` 仅服务端读取；默认代理端口 3002，可用 `API_PROXY_PORT` 覆盖。
 - 模型密钥支持 OpenAI/Google/OpenAI-Compatible；确保未留占位符，避免在客户端暴露。
+
+## Landing the Plane (Session Completion)
+结束前清单（团队模式）：
+
+1. **File issues for remaining work**：把未完事项建成/补充到 bd issue（notes/依赖/assignee）。
+2. **Run quality gates**（如改了代码）：`npm --prefix apps/web run build` / `cd apps/api && uv run python -m compileall app`。
+3. **Update issue status**：进行中用 `bd update --status in_progress`；完成用 `bd close`。
+4. **SYNC + PUSH（必须）**：
+   ```bash
+   git pull --rebase
+   bd sync
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up**：清理 stashes、无用 worktrees/分支。
+6. **Verify**：代码与 `.beads/issues.jsonl` 均已提交并 push；bd 里状态/notes 记录完整。
+7. **Hand off**：在 bd issue notes 写明结论、测试命令与下一步。
+
+**CRITICAL RULES:**
+- Work is NOT complete until `bd sync` and `git push` both succeed
+- NEVER stop before pushing - that leaves work stranded locally
+- Use `bd` for task tracking

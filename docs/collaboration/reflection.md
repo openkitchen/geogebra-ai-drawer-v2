@@ -1,8 +1,8 @@
 # Reflection 工作流（LLM 失败复盘）
 
 ## 角色与触发
-- **发起人**：wei（PM）。在看到 LLM 失败/用户体验问题时创建一条 reflection 任务（放入 `docs/collaboration/todo.md`）。
-- **执行人**：codex-A / codex-B（按任务 Owner 分配）。每个任务至少由一人负责。
+- **发起人**：wei（PM）。在看到 LLM 失败/用户体验问题时创建一条 reflection 任务（创建 bd issue，并指派 assignee）。
+- **执行人**：一个或多个 agent（按 bd issue 的 `assignee` 分配）。每个任务至少由一人负责。
 
 ## 输入
 - 最近的错误日志条目（见 `logs/llm-errors.log`）。
@@ -21,12 +21,12 @@
 5) **验证**：
    - 补充/更新 `docs/self-test.md` 的相关用例。
    - 本地或 dev 环境跑至少一次针对性自测（含修复前场景）。
-6) **记录**：在 `docs/collaboration/decision-log.md` 如涉及规范/约束变更则追加决策；在 todo 中将任务标记为 done，并写明验证结果。
+6) **记录**：在 `docs/collaboration/decision-log.md` 如涉及规范/约束变更则追加决策；关闭 bd issue（`bd close`）并写明验证结果。
 
 ## 输出
 - 修正后的提示词/代码。
 - 新增或更新的自测用例与运行结果。
-- 任务看板（todo.md）状态更新。
+- bd issue 状态更新（status/notes）。
 
 ## 校验循环（举一反三）
 1) **模式泛化**：对每个发现的问题，列出 2–3 个“同类变体”问题（措辞不同、约束稍变、点/边/角位置变），作为新增自测。

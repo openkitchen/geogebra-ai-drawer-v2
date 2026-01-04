@@ -1,15 +1,29 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    host: '127.0.0.1',
-    port: 3000,
-    strictPort: true,
-    proxy: {
-      '/api': 'http://127.0.0.1:3002',
-      '/healthz': 'http://127.0.0.1:3002',
+function toPort(value: string | undefined, fallback: number) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+export default defineConfig(() => {
+  const webHost = process.env.WEB_HOST || '127.0.0.1';
+  const webPort = toPort(process.env.WEB_PORT, 3000);
+
+  const apiHost = process.env.API_HOST || '127.0.0.1';
+  const apiPort = toPort(process.env.API_PORT, 3002);
+  const apiTarget = `http://${apiHost}:${apiPort}`;
+
+  return {
+    plugins: [react()],
+    server: {
+      host: webHost,
+      port: webPort,
+      strictPort: true,
+      proxy: {
+        '/api': apiTarget,
+        '/healthz': apiTarget,
+      },
     },
-  },
+  };
 });

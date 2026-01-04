@@ -8,7 +8,7 @@
 - 目标：面向未来需求做架构/代码模式重构审计，输出“优先级清单”，由人类决策后再逐项落地。
 - 产出物：
   - `docs/design/refactor-arch-report-YYYY-MM-DD.md`
-  - `docs/collaboration/todo.md`：新增/更新与报告对应的重构任务（含 DependsOn 与验证方式）
+  - `bd` issues：创建/更新与报告对应的重构任务（含依赖与验证方式）
 - 约束：
   - **只做诊断与任务分解**，不直接改代码；除非用户明确要求开始重构。
   - 稳定性优先：优先收敛协议/边界/可观测性，再做结构拆分。
@@ -30,4 +30,3 @@ cp -R skills/refactor-arch ~/.codex/skills/refactor-arch
 ### 3) 系统内置技能（仅说明）
 
 系统内置技能通常位于 `~/.codex/skills/.system/*`，用于通用能力（例如 skill-creator/skill-installer）。它们不属于本仓库文档的一部分，但会在运行时被 Codex 发现并可用。
-

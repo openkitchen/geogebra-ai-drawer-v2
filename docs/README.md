@@ -27,7 +27,7 @@
 
 ### 协作（Collaboration）
 - `docs/collaboration/parallel-dev.md`: 并行开发流程、分支/提交流程、冲突处理
-- `docs/collaboration/todo.md`: 单一任务源（ID/Owner/Status/Notes）
+- `bd`（beads）：单一任务源（issues/依赖/assignee/notes）
 - `docs/collaboration/decision-log.md`: 高影响决策记录（Topic/Options/Decision）
 - `docs/collaboration/inbox-codex-A.md` / `docs/collaboration/inbox-codex-B.md`: 双开发的收件箱，用于交接与提醒
 
