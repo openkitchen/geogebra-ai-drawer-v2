@@ -13,8 +13,7 @@ Usage:
     # 1. Start API
     ./scripts/v2_dev.sh
 
-    # 2. Run Evals
-    export EVAL_JUDGE_API_KEY="sk-..."  # or use .env
+    # 2. Run Evals (LLM judge uses the `fast` role from `.env.local`)
     python3 scripts/v2_eval_runner.py
 """
 
@@ -51,15 +50,16 @@ def load_config(args: argparse.Namespace) -> EvalConfig:
     # Avoid proxy issues for localhost
     os.environ["no_proxy"] = "localhost,127.0.0.1"
 
-    # Try loading .env with python-dotenv first for robust parsing
+    env_path = (os.getenv("V2_ENV_FILE") or "").strip() or ".env.local"
+
+    # Try loading .env.local with python-dotenv first for robust parsing.
     try:
         from dotenv import load_dotenv
-        load_dotenv(".env.local")
-        load_dotenv(".env")
+        load_dotenv(env_path)
         env_vars = os.environ.copy()
     except ImportError:
-        # Fallback to manual parsing
-        env_files = [Path(".env.local"), Path(".env")]
+        # Fallback to manual parsing (best-effort, does not support multi-line JSON well).
+        env_files = [Path(env_path)]
         env_vars = os.environ.copy()
         
         for p in env_files:
@@ -77,58 +77,41 @@ def load_config(args: argparse.Namespace) -> EvalConfig:
                             if k not in env_vars: # Don't override existing env
                                 env_vars[k] = v
 
-    # Resolve Judge Config
-    # Priority: 1. EVAL_JUDGE_* vars 2. "fast" role from project config
-    
-    judge_api_key = env_vars.get("EVAL_JUDGE_API_KEY")
-    judge_base_url = env_vars.get("EVAL_JUDGE_BASE_URL")
-    judge_model = env_vars.get("EVAL_JUDGE_MODEL")
-    
-    if not judge_api_key:
-        # Try to resolve "fast" role
-        try:
-            aliases_json = env_vars.get("LLM_MODEL_ALIASES_JSON")
-            bindings_json = env_vars.get("LLM_ROLE_BINDINGS_JSON")
-            
-            if aliases_json and bindings_json:
-                aliases = json.loads(aliases_json)
-                bindings = json.loads(bindings_json)
-                
-                # Check for "fast" role binding
-                fast_alias_id = bindings.get("fast")
-                if fast_alias_id:
-                    # Find matching alias
-                    chosen = next((a for a in aliases if a.get("id") == fast_alias_id), None)
-                    if chosen:
-                        judge_api_key = chosen.get("apiKey")
-                        
-                        # Handle base URL
-                        base = chosen.get("baseURL") or chosen.get("baseUrl") or chosen.get("base_url")
-                        if base:
-                            judge_base_url = str(base).rstrip("/")
-                        
-                        # Handle model name
-                        model = chosen.get("modelId") or chosen.get("model")
-                        if not model and isinstance(chosen.get("models"), dict):
-                            model = chosen["models"].get("main")
-                        
-                        if model:
-                            judge_model = str(model)
-                            
-                        # If provider is openai-compatible, we might need to be careful with base_url
-                        if chosen.get("provider") == "openai-compatible" and not judge_base_url:
-                             pass # Warn?
-        except Exception as e:
-            if getattr(args, "verbose", False):
-                print(f"Warning: Failed to parse project LLM config for 'fast' role: {e}")
+    # Resolve judge config.
+    # Policy: Judge is always the project's `fast` role, same as other roles.
+    # No EVAL_JUDGE_* overrides. No OPENAI_* fallback.
+    judge_api_key: str | None = None
+    judge_base_url: str | None = None
+    judge_model: str = ""
 
-    # Fallbacks
-    if not judge_api_key:
-        judge_api_key = env_vars.get("OPENAI_API_KEY")
-    if not judge_base_url:
-        judge_base_url = env_vars.get("OPENAI_BASE_URL")
-    if not judge_model:
-        judge_model = "gpt-4o-mini"
+    try:
+        aliases_json = env_vars.get("LLM_MODEL_ALIASES_JSON")
+        bindings_json = env_vars.get("LLM_ROLE_BINDINGS_JSON")
+
+        if aliases_json and bindings_json:
+            aliases = json.loads(aliases_json)
+            bindings = json.loads(bindings_json)
+
+            fast_alias_id = bindings.get("fast") if isinstance(bindings, dict) else None
+            if isinstance(fast_alias_id, str) and fast_alias_id.strip() and isinstance(aliases, list):
+                chosen = next((a for a in aliases if isinstance(a, dict) and a.get("id") == fast_alias_id), None)
+                if isinstance(chosen, dict):
+                    api_key = chosen.get("apiKey")
+                    if isinstance(api_key, str) and api_key.strip():
+                        judge_api_key = api_key.strip()
+
+                    base = chosen.get("baseURL") or chosen.get("baseUrl") or chosen.get("base_url")
+                    if isinstance(base, str) and base.strip():
+                        judge_base_url = base.strip().rstrip("/")
+
+                    model = chosen.get("modelId") or chosen.get("model")
+                    if not model and isinstance(chosen.get("models"), dict):
+                        model = chosen["models"].get("main")
+                    if isinstance(model, str) and model.strip():
+                        judge_model = model.strip()
+    except Exception as e:
+        if getattr(args, "verbose", False):
+            print(f"Warning: Failed to parse project LLM config for judge (fast role): {e}")
 
     return EvalConfig(
         base_url=args.base_url.rstrip("/"),
@@ -427,10 +410,13 @@ def http_post_sse(url: str, body: Dict[str, Any], timeout: float = 30.0) -> List
 
 def call_llm_judge(config: EvalConfig, prompt: str) -> Dict[str, Any]:
     """Calls an OpenAI-compatible LLM to judge the output."""
-    if not config.judge_api_key:
-        return {"pass": False, "reason": "Judge API key not configured (EVAL_JUDGE_API_KEY)"}
+    if not config.judge_api_key or not config.judge_base_url or not config.judge_model:
+        return {
+            "pass": False,
+            "reason": "Judge not configured. Set LLM_MODEL_ALIASES_JSON + LLM_ROLE_BINDINGS_JSON in .env.local and bind role 'fast' to an alias with apiKey/baseURL/modelId.",
+        }
 
-    url = f"{config.judge_base_url or 'https://api.openai.com/v1'}/chat/completions"
+    url = f"{config.judge_base_url}/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config.judge_api_key}"

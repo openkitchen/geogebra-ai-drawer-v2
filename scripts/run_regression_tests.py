@@ -6,8 +6,8 @@ This script runs the v2 "golden set" against the local API and writes a JSON rep
 for CI/regression tracking.
 
 By default it runs deterministic assertions only (tool_called/regex). Use
---with-llm-judge to enable LLM-based judging (requires EVAL_JUDGE_API_KEY or an
-equivalent project LLM role binding).
+--with-llm-judge to enable LLM-based judging (requires `.env.local` model
+aliases + role bindings; judge always uses the `fast` role).
 """
 
 from __future__ import annotations
@@ -137,7 +137,10 @@ def main() -> int:
     config = v2_eval_runner.load_config(config_args)
 
     if args.with_llm_judge and not config.judge_api_key:
-        print("ERR: --with-llm-judge requires a judge API key (EVAL_JUDGE_API_KEY).", file=sys.stderr)
+        print(
+            "ERR: --with-llm-judge requires judge config via .env.local (LLM_MODEL_ALIASES_JSON + LLM_ROLE_BINDINGS_JSON, with role 'fast' bound to an alias with apiKey/baseURL/modelId).",
+            file=sys.stderr,
+        )
         return 2
 
     print(f"Loaded {len(cases)} cases from {dataset_path}")
@@ -240,4 +243,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
