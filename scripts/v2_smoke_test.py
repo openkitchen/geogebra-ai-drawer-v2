@@ -4,12 +4,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 
@@ -18,6 +20,71 @@ class SseEvent:
     event: str
     data_raw: str
     data: Any | None = None
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _trace_dir() -> Path:
+    raw = (os.getenv("V2_TRACE_DIR") or "").strip()
+    if raw:
+        return Path(raw)
+    return _repo_root() / "logs" / "v2"
+
+
+def _load_run_exceptions(*, run_id: str) -> list[dict[str, str]]:
+    path = _trace_dir() / f"run-{run_id}.jsonl"
+    if not path.is_file():
+        return []
+
+    items: list[dict[str, str]] = []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict) or obj.get("kind") != "exception":
+                    continue
+                items.append(
+                    {
+                        "where": str(obj.get("where") or ""),
+                        "type": str(obj.get("type") or ""),
+                        "message": str(obj.get("message") or ""),
+                    }
+                )
+    except Exception:
+        return []
+
+    return items
+
+
+def _print_run_exception_summary(*, run_id: str, fail_on_exception: bool) -> bool:
+    exc = _load_run_exceptions(run_id=run_id)
+    if not exc:
+        return False
+
+    print(f"WARN: run_id={run_id} recorded {len(exc)} exception(s) in debug trace:")
+    for e in exc[:8]:
+        where = (e.get("where") or "").strip() or "<unknown>"
+        typ = (e.get("type") or "").strip() or "<unknown>"
+        msg = (e.get("message") or "").strip()
+        if len(msg) > 180:
+            msg = msg[:180] + "…"
+        print(f"  - {where}: {typ}: {msg}")
+    if len(exc) > 8:
+        print(f"  ... ({len(exc) - 8} more)")
+
+    if fail_on_exception:
+        print("ERR: failing because --fail-on-exception is set.", file=sys.stderr)
+        return True
+
+    return False
 
 
 def _json_dumps(value: Any) -> bytes:
@@ -469,6 +536,7 @@ def run_smoke(
     timeout_s: float,
     verbose: bool,
     force_repair_once: bool,
+    fail_on_exception: bool,
     required_tools: set[str] | None = None,
 ) -> int:
     if thread_id is None:
@@ -529,6 +597,8 @@ def run_smoke(
             print(f"ERR: required tool(s) not seen: {missing}", file=sys.stderr)
             return 2
         print("OK: run finished without interrupt (no tool required).")
+        if _print_run_exception_summary(run_id=run_id, fail_on_exception=fail_on_exception):
+            return 2
         return 0
 
     for step in range(1, 10):
@@ -597,6 +667,8 @@ def run_smoke(
                     print(f"ERR: required tool(s) not seen: {missing}", file=sys.stderr)
                     return 2
             print(f"OK: completed after {step} resume(s). run_id={run_id}")
+            if _print_run_exception_summary(run_id=run_id, fail_on_exception=fail_on_exception):
+                return 2
             return 0
 
     print("ERR: too many interrupts; aborting", file=sys.stderr)
@@ -611,6 +683,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--thread-id", help="Reuse an existing thread_id (optional)")
     parser.add_argument("--timeout-s", type=float, default=30.0, help="HTTP timeout seconds")
     parser.add_argument("--verbose", action="store_true", help="Print full JSON payloads")
+    parser.add_argument(
+        "--fail-on-exception",
+        action="store_true",
+        help="Fail (non-zero exit) if debug trace contains exception entries for the run.",
+    )
     parser.add_argument(
         "--require-tool",
         action="append",
@@ -647,6 +724,7 @@ def main(argv: list[str]) -> int:
                 timeout_s=args.timeout_s,
                 verbose=args.verbose,
                 force_repair_once=bool(args.force_repair_once) and i == 1,
+                fail_on_exception=bool(args.fail_on_exception),
                 required_tools=required_tools,
             )
             if code != 0:

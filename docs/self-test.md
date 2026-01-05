@@ -29,6 +29,10 @@
 ./scripts/v2_acceptance_api.sh
 ```
 期望：脚本以 `OK: v2 acceptance (api) passed.` 结束并返回 0。
+该脚本会在每次 run 结束后检查 `logs/v2/run-<run_id>.jsonl` 是否出现 `kind="exception"` 并打印摘要；如需“出现 exception 就直接失败”，请用：
+```bash
+V2_ACCEPTANCE_FAIL_ON_EXCEPTION=1 ./scripts/v2_acceptance_api.sh
+```
 如果出现 `401/403` / `insufficient_quota` / “没能调用语言模型”，先检查并更新 `.env.local`（参考 `docs/env.example.md`），然后重启 `./scripts/v2_dev.sh` 再重跑。
 
 ### D. 验收记录（建议）
@@ -103,6 +107,7 @@ export V2_TRACE_DIR="/absolute/path/to/logs"
 如果你希望“看见完整的 LLM prompt/response + 调用链路”，建议接入 LangSmith：
 
 > 注意：修改 `.env.local` 后需要重启 `uvicorn` 才会生效。
+> 你也可以直接把这些变量写进 `.env.local`（后端会自动加载），不一定要手动 `export`。
 
 ```bash
 # 推荐（LangChain 标准 env）
@@ -110,10 +115,14 @@ export LANGCHAIN_TRACING_V2="true"
 export LANGCHAIN_API_KEY="..."
 export LANGCHAIN_PROJECT="geogebra-ai-drawer-v2"
 
+# （可选）自定义 LangSmith endpoint（自建/代理时有用）
+# export LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
+
 # 兼容写法（v2 会自动映射到 LANGCHAIN_*）
 # export LANGSMITH_TRACING="true"
 # export LANGSMITH_API_KEY="..."
 # export LANGSMITH_PROJECT="geogebra-ai-drawer-v2"
+# export LANGSMITH_ENDPOINT="https://api.smith.langchain.com"
 ```
 
 ### curl 自测
@@ -138,6 +147,9 @@ python3 scripts/v2_smoke_test.py --base-url http://127.0.0.1:3002 --user-text "�
 
 # （可选）强制制造一次“画布诊断失败”，验证 verify→rollback→repair loop（会触发更多次 interrupt/resume）
 python3 scripts/v2_smoke_test.py --base-url http://127.0.0.1:3002 --user-text "画一个圆" --force-repair-once
+
+# （可选）严格模式：如果 debug trace 里记录了任何 exception，则直接失败并打印摘要
+python3 scripts/v2_smoke_test.py --base-url http://127.0.0.1:3002 --user-text "画一个圆" --fail-on-exception
 ```
 
 继续（拿到上一步 `run_start` 里的 `run_id` 后）：

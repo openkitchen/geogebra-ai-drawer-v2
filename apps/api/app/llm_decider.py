@@ -200,6 +200,10 @@ def _maybe_alias_langsmith_env_vars() -> None:
     if ls_tracing and not (os.getenv("LANGCHAIN_TRACING_V2") or "").strip():
         os.environ.setdefault("LANGCHAIN_TRACING_V2", ls_tracing)
 
+    ls_endpoint = (os.getenv("LANGSMITH_ENDPOINT") or "").strip()
+    if ls_endpoint and not (os.getenv("LANGCHAIN_ENDPOINT") or "").strip():
+        os.environ.setdefault("LANGCHAIN_ENDPOINT", ls_endpoint)
+
 
 def _maybe_load_env_files() -> None:
     global _ENV_FILES_LOADED

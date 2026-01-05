@@ -142,7 +142,7 @@
 
 1. **自动化工具**：
    - `scripts/v2_create_studio_thread.py` - 自动创建 Studio thread
-   - `scripts/run_regression_tests.py` - 回归测试（默认跑 deterministic 断言；可用 `--with-llm-judge` 启用 LLM Judge）
+   - `scripts/run_regression_tests.py` - 回归测试（默认启用 LLM Judge；可用 `--no-llm-judge` 只跑 deterministic 断言）
 
 2. **可视化工具**：
    - LangGraph Studio - 完整的执行过程可视化

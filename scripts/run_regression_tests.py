@@ -6,8 +6,9 @@ This script runs the v2 "golden set" against the local API and writes a JSON rep
 for CI/regression tracking.
 
 By default it runs deterministic assertions only (tool_called/regex). Use
---with-llm-judge to enable LLM-based judging (requires `.env.local` model
-aliases + role bindings; judge always uses the `fast` role).
+LLM-based judging is enabled by default when judge config is present. Use
+--no-llm-judge to run deterministic assertions only (tool_called/regex).
+Judge always uses the `fast` role from `.env.local`.
 """
 
 from __future__ import annotations
@@ -105,8 +106,16 @@ def main() -> int:
     parser.add_argument("--max-cases", type=int, default=0, help="If set, run only first N cases")
     parser.add_argument(
         "--with-llm-judge",
+        dest="with_llm_judge",
         action="store_true",
-        help="Enable LLM-based assertions (llm_judge). Requires judge API key configuration.",
+        default=True,
+        help="Enable LLM-based assertions (llm_judge). (Default: enabled)",
+    )
+    parser.add_argument(
+        "--no-llm-judge",
+        dest="with_llm_judge",
+        action="store_false",
+        help="Disable LLM-based assertions; run deterministic checks only.",
     )
     parser.add_argument("--output", default="", help="Report JSON path (default: logs/regression/...)")
     parser.add_argument("--verbose", action="store_true")
@@ -138,7 +147,7 @@ def main() -> int:
 
     if args.with_llm_judge and (not config.judge_api_key or not config.judge_base_url or not config.judge_model):
         print(
-            "ERR: --with-llm-judge requires judge config via .env.local (LLM_MODEL_ALIASES_JSON + LLM_ROLE_BINDINGS_JSON, with role 'fast' bound to an alias with apiKey/baseURL/modelId).",
+            "ERR: LLM judge is enabled but not configured. Configure `.env.local` (LLM_MODEL_ALIASES_JSON + LLM_ROLE_BINDINGS_JSON, with role 'fast' bound to an alias with apiKey/baseURL/modelId), or re-run with --no-llm-judge.",
             file=sys.stderr,
         )
         return 2
@@ -147,7 +156,7 @@ def main() -> int:
     print(f"Base URL: {config.base_url}")
     print(f"Prompt Version: {args.prompt_version}")
     print(f"Concurrency: {config.concurrency}")
-    print(f"LLM Judge Enabled: {'Yes' if args.with_llm_judge else 'No (deterministic only)'}")
+    print(f"LLM Judge Enabled: {'Yes' if args.with_llm_judge else 'No (--no-llm-judge)'}")
 
     results: list[dict[str, Any]] = []
     passed = failed = errors = 0

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import traceback
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger("v2.debug_trace")
 
 
 def _now_ms() -> int:
@@ -78,3 +81,14 @@ def trace_exception(*, run_id: str, ui_debug: bool, where: str, exc: BaseExcepti
             "traceback": traceback.format_exc(),
         },
     )
+
+    # Also surface exceptions to standard logs in dev/debug mode so they don't get lost in JSONL traces.
+    try:
+        if _trace_dir(ui_debug) is None:
+            return
+        msg = str(exc).replace("\r", " ").replace("\n", " ").strip()
+        if len(msg) > 240:
+            msg = msg[:240] + "…"
+        _logger.warning("run_id=%s where=%s exc=%s: %s", run_id, where, type(exc).__name__, msg)
+    except Exception:
+        return

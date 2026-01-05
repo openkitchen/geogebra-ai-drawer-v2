@@ -53,6 +53,22 @@ V2_LLM_TEMPERATURE=0
 LLM_TIMEOUT_MS=20000
 ```
 
+### Optional: LangSmith tracing (recommended for RCA)
+
+```bash
+# Either set LANGCHAIN_* directly...
+LANGCHAIN_TRACING_V2="true"
+LANGCHAIN_API_KEY="YOUR_LANGSMITH_API_KEY"
+LANGCHAIN_PROJECT="geogebra-ai-drawer-v2"
+# LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"  # optional
+
+# ...or use LANGSMITH_* (v2 will map to LANGCHAIN_* automatically)
+# LANGSMITH_TRACING="true"
+# LANGSMITH_API_KEY="YOUR_LANGSMITH_API_KEY"
+# LANGSMITH_PROJECT="geogebra-ai-drawer-v2"
+# LANGSMITH_ENDPOINT="https://api.smith.langchain.com"  # optional
+```
+
 ### Notes
 - **Do not commit real keys**.
 - `provider` must be one of: `openai` | `google` | `openai-compatible`.

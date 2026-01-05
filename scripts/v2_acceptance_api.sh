@@ -63,12 +63,23 @@ print(f"OK: GET /api/schema/v2 protocol_version={protocol_version}")
 PY
 
 echo "== smoke: SSE + interrupt/resume (+ repair once) =="
-python3 "$ROOT_DIR/scripts/v2_smoke_test.py" \
-  --base-url "$BASE_URL" \
-  --turn "画一个圆" \
-  --turn "再画一个三角形ABC" \
-  --require-tool exec_geogebra_commands \
-  --force-repair-once
+FAIL_ON_EXCEPTION="${V2_ACCEPTANCE_FAIL_ON_EXCEPTION:-}"
+if [[ -n "$FAIL_ON_EXCEPTION" && "$FAIL_ON_EXCEPTION" != "0" && "$FAIL_ON_EXCEPTION" != "false" ]]; then
+  python3 "$ROOT_DIR/scripts/v2_smoke_test.py" \
+    --base-url "$BASE_URL" \
+    --turn "画一个圆" \
+    --turn "再画一个三角形ABC" \
+    --require-tool exec_geogebra_commands \
+    --fail-on-exception \
+    --force-repair-once
+else
+  python3 "$ROOT_DIR/scripts/v2_smoke_test.py" \
+    --base-url "$BASE_URL" \
+    --turn "画一个圆" \
+    --turn "再画一个三角形ABC" \
+    --require-tool exec_geogebra_commands \
+    --force-repair-once
+fi
 
 echo "OK: v2 acceptance (api) passed."
 echo "NOTE: This script validates ai-api only. Full acceptance still requires a browser run for ai-web (see docs/self-test.md)."

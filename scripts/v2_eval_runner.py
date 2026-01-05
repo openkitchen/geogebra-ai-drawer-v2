@@ -46,36 +46,103 @@ class EvalConfig:
     golden_set_path: str
     verbose: bool
 
+_ENV_REF_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _strip_wrapping_quotes(raw: str) -> str:
+    s = raw.strip()
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        return s[1:-1]
+    return s
+
+
+def _expand_env_refs(raw: str, env_vars: dict[str, str]) -> str:
+    def repl(match: re.Match[str]) -> str:
+        key = match.group(1)
+        return env_vars.get(key) or ""
+
+    out = raw
+    for _ in range(6):
+        expanded = _ENV_REF_RE.sub(repl, out)
+        if expanded == out:
+            break
+        out = expanded
+    return out
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env-style file (best-effort, supports multi-line quoted values)."""
+    if not path.is_file():
+        return {}
+
+    out: dict[str, str] = {}
+    lines = path.read_text("utf-8").splitlines()
+    i = 0
+    while i < len(lines):
+        raw_line = lines[i]
+        i += 1
+
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.lstrip()
+
+        if not value:
+            out[key] = ""
+            continue
+
+        if value[0] in {"'", '"'}:
+            quote = value[0]
+            first = value[1:]
+            parts: list[str] = []
+            if first.rstrip().endswith(quote):
+                parts.append(first.rstrip()[:-1])
+            else:
+                parts.append(first)
+                while i < len(lines):
+                    nxt = lines[i]
+                    i += 1
+                    if nxt.rstrip().endswith(quote):
+                        parts.append(nxt.rstrip()[:-1])
+                        break
+                    parts.append(nxt)
+            out[key] = "\n".join(parts)
+            continue
+
+        # Unquoted value. (We intentionally keep it simple; no inline comment stripping.)
+        out[key] = value
+
+    return out
+
+
 def load_config(args: argparse.Namespace) -> EvalConfig:
     # Avoid proxy issues for localhost
     os.environ["no_proxy"] = "localhost,127.0.0.1"
 
+    root = _repo_root()
     env_path = (os.getenv("V2_ENV_FILE") or "").strip() or ".env.local"
+    env_file = Path(env_path)
+    if not env_file.is_absolute():
+        env_file = (root / env_file).resolve()
 
-    # Try loading .env.local with python-dotenv first for robust parsing.
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(env_path)
-        env_vars = os.environ.copy()
-    except ImportError:
-        # Fallback to manual parsing (best-effort, does not support multi-line JSON well).
-        env_files = [Path(env_path)]
-        env_vars = os.environ.copy()
-        
-        for p in env_files:
-            if p.exists():
-                with open(p, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#"): continue
-                        if "=" in line:
-                            k, v = line.split("=", 1)
-                            # strip quotes
-                            v = v.strip()
-                            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
-                                v = v[1:-1]
-                            if k not in env_vars: # Don't override existing env
-                                env_vars[k] = v
+    env_vars = os.environ.copy()
+    for k, v in _parse_env_file(env_file).items():
+        env_vars.setdefault(k, v)
 
     # Resolve judge config.
     # Policy: Judge is always the project's `fast` role, same as other roles.
@@ -89,8 +156,8 @@ def load_config(args: argparse.Namespace) -> EvalConfig:
         bindings_json = env_vars.get("LLM_ROLE_BINDINGS_JSON")
 
         if aliases_json and bindings_json:
-            aliases = json.loads(aliases_json)
-            bindings = json.loads(bindings_json)
+            aliases = json.loads(_expand_env_refs(_strip_wrapping_quotes(aliases_json), env_vars))
+            bindings = json.loads(_expand_env_refs(_strip_wrapping_quotes(bindings_json), env_vars))
 
             fast_alias_id = bindings.get("fast") if isinstance(bindings, dict) else None
             if isinstance(fast_alias_id, str) and fast_alias_id.strip() and isinstance(aliases, list):
