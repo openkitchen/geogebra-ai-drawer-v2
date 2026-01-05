@@ -283,10 +283,10 @@ export default function App() {
           GeoGebra AI
         </div>
         <div className="headerActions">
-          <button className="secondary" onClick={() => void startNewThread()} disabled={busy} title="New Thread">
+          <button className="secondary" data-testid="new-thread" onClick={() => void startNewThread()} disabled={busy} title="New Thread">
             New
           </button>
-          <button className="secondary" onClick={clearCanvas} disabled={!ggbApi || busy} title="Clear Canvas">
+          <button className="secondary" data-testid="clear-canvas" onClick={clearCanvas} disabled={!ggbApi || busy} title="Clear Canvas">
              Clear
           </button>
           
@@ -294,6 +294,7 @@ export default function App() {
           
           <button 
             className={`secondary ${devMode ? 'active' : ''}`} 
+            data-testid="dev-toggle"
             onClick={() => {
               setDevMode(!devMode);
               // Don't auto-open drawer, let user control it separately
@@ -306,6 +307,7 @@ export default function App() {
           {devMode && (
              <button 
                className="secondary" 
+               data-testid="tools-toggle"
                onClick={() => setDebugDrawerOpen(!debugDrawerOpen)}
                title={debugDrawerOpen ? "Hide Tools" : "Show Tools"}
              >
@@ -351,6 +353,7 @@ export default function App() {
                <textarea
                  ref={textareaRef}
                  className="chat-input"
+                 data-testid="chat-input"
                  value={input}
                  placeholder={ggbApi ? '描述你想画的图形...' : '等待画板加载...'}
                  onChange={(e) => setInput(e.target.value)}
@@ -364,6 +367,7 @@ export default function App() {
                <button 
                  type="submit"
                  className="send-btn" 
+                 data-testid="send-button"
                  disabled={!ggbApi || busy || !input.trim()}
                >
                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">

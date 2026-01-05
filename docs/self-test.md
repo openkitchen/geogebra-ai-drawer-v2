@@ -23,6 +23,15 @@
 - 发送一条消息（例如“画一个圆”）
 - 期望：画板出现目标图形；Debug/Timeline 能看到 `interrupt → resume → tool_end → final → run_end` 的完整链路
 
+> 可选（推荐给自动化/CI/agent）：用 Playwright 自动化完成同一条主路径验收（会启动本地 web+api、跑一次“画一个圆”、并在 `logs/acceptance/` 生成截图证据）：
+```bash
+npm run acceptance:v2:web
+```
+如首次运行提示缺少浏览器，可先执行：
+```bash
+npx playwright install chromium
+```
+
 ### C. API 基础用例（ai-api，必须跑）
 另开终端（确保 API 已在 `127.0.0.1:3002` 或你的 `API_PORT` 上启动）：
 ```bash

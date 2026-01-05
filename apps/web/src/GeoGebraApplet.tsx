@@ -157,7 +157,9 @@ export function GeoGebraApplet({ className, onAppletReady }: GeoGebraAppletProps
   return (
     <div className={className}>
       <div className="ggb-status">
-        <span className={`ggb-pill ${status}`}>applet: {status}</span>
+        <span className={`ggb-pill ${status}`} data-testid="ggb-status-pill">
+          applet: {status}
+        </span>
         {status === 'error' ? <span className="ggb-error">{error}</span> : null}
       </div>
       <div ref={hostRef} className="ggb-host" id="ggb-canvas-root" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }} />

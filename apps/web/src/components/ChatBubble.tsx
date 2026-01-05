@@ -62,6 +62,7 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
           <div className="trace-details">
             <div
               className="trace-summary"
+              data-testid="trace-summary"
               onClick={() => setShowTrace(!showTrace)}
               style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#64748b' }}
             >
@@ -73,7 +74,11 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
             </div>
 
             {showTrace && (
-              <div className="trace-log" style={{ marginTop: 8, padding: 8, background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 11, overflowX: 'auto' }}>
+              <div
+                className="trace-log"
+                data-testid="trace-log"
+                style={{ marginTop: 8, padding: 8, background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 11, overflowX: 'auto' }}
+              >
                 {!events || events.length === 0 ? (
                   <div style={{ color: '#64748b', fontStyle: 'italic' }}>No events recorded for this message.</div>
                 ) : (

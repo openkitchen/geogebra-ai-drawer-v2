@@ -41,10 +41,10 @@ export function CanvasInspector({ ggbApi }: CanvasInspectorProps) {
       <summary>Canvas Inspector</summary>
       <div className="inspector">
         <div className="inspectorActions">
-          <button className="secondary" onClick={() => void refresh()} disabled={!ggbApi || busy}>
+          <button className="secondary" data-testid="canvas-refresh" onClick={() => void refresh()} disabled={!ggbApi || busy}>
             Refresh objects
           </button>
-          <div className="meta">
+          <div className="meta" data-testid="canvas-meta">
             {!ggbApi ? 'ggbApplet not ready' : busy ? 'loading…' : error ? `ERROR: ${error}` : `objects: ${objects.length}`}
           </div>
         </div>
@@ -81,4 +81,3 @@ export function CanvasInspector({ ggbApi }: CanvasInspectorProps) {
     </details>
   );
 }
-

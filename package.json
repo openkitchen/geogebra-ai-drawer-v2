@@ -12,6 +12,7 @@
     "dev:v2:web": "npm --prefix apps/web run dev",
     "dev:v2:api": "cd apps/api && uv run uvicorn app.main:app --reload --port 3002",
     "dev:v2": "concurrently -n web,api -c \"cyan,magenta\" \"npm run dev:v2:web\" \"npm run dev:v2:api\"",
+    "acceptance:v2:web": "node scripts/v2_acceptance_web_playwright.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "start": "NODE_ENV=production node server/index.mjs"
@@ -31,6 +32,7 @@
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.1.2",
+    "playwright": "^1.55.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
