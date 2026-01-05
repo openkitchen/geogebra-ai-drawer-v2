@@ -89,6 +89,13 @@ def trace_exception(*, run_id: str, ui_debug: bool, where: str, exc: BaseExcepti
         msg = str(exc).replace("\r", " ").replace("\n", " ").strip()
         if len(msg) > 240:
             msg = msg[:240] + "…"
-        _logger.warning("run_id=%s where=%s exc=%s: %s", run_id, where, type(exc).__name__, msg)
+        _logger.warning(
+            "run_id=%s where=%s exc=%s: %s",
+            run_id,
+            where,
+            type(exc).__name__,
+            msg,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
     except Exception:
         return

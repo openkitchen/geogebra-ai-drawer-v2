@@ -63,8 +63,8 @@ print(f"OK: GET /api/schema/v2 protocol_version={protocol_version}")
 PY
 
 echo "== smoke: SSE + interrupt/resume (+ repair once) =="
-FAIL_ON_EXCEPTION="${V2_ACCEPTANCE_FAIL_ON_EXCEPTION:-}"
-if [[ -n "$FAIL_ON_EXCEPTION" && "$FAIL_ON_EXCEPTION" != "0" && "$FAIL_ON_EXCEPTION" != "false" ]]; then
+FAIL_ON_EXCEPTION="${V2_ACCEPTANCE_FAIL_ON_EXCEPTION:-1}"
+if [[ "$FAIL_ON_EXCEPTION" != "0" && "$FAIL_ON_EXCEPTION" != "false" ]]; then
   python3 "$ROOT_DIR/scripts/v2_smoke_test.py" \
     --base-url "$BASE_URL" \
     --turn "画一个圆" \

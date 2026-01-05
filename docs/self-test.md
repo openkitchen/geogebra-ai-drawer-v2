@@ -29,9 +29,10 @@
 ./scripts/v2_acceptance_api.sh
 ```
 期望：脚本以 `OK: v2 acceptance (api) passed.` 结束并返回 0。
-该脚本会在每次 run 结束后检查 `logs/v2/run-<run_id>.jsonl` 是否出现 `kind="exception"` 并打印摘要；如需“出现 exception 就直接失败”，请用：
+该脚本默认会在每次 run 结束后检查 `logs/v2/run-<run_id>.jsonl` 是否出现 `kind="exception"` 并打印摘要；**如果出现 exception（即使最终输出了 final/run_end），也会按失败处理**，避免“看起来成功但内部其实超时/报错”。
+如需临时放宽（只打印摘要但不失败），请用：
 ```bash
-V2_ACCEPTANCE_FAIL_ON_EXCEPTION=1 ./scripts/v2_acceptance_api.sh
+V2_ACCEPTANCE_FAIL_ON_EXCEPTION=0 ./scripts/v2_acceptance_api.sh
 ```
 如果出现 `401/403` / `insufficient_quota` / “没能调用语言模型”，先检查并更新 `.env.local`（参考 `docs/env.example.md`），然后重启 `./scripts/v2_dev.sh` 再重跑。
 
@@ -69,7 +70,6 @@ python -m pip install -e .
 # 可选：开启真实 LLM（当前 v2 仅支持 openai/openai-compatible）
 # 推荐：复用 v1 `.env.local` 的 LLM_MODEL_ALIASES_JSON + LLM_ROLE_BINDINGS_JSON
 # export V2_LLM_ROLE="main"          # 或 gemini_fast / gemini_think（OpenAI-compatible）
-# export V2_LLM_FALLBACK_ROLES="fast,fallback"  # 可选：主模型失败时自动换角色重试（逗号分隔）
 # （注意：若 role 指向 provider=google，目前会退回 stub，待后续补齐原生 Gemini）
 # 或：显式配置 OpenAI / OpenAI-compatible
 # export V2_LLM_API_KEY="..."

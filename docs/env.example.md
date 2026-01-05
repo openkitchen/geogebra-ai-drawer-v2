@@ -44,10 +44,12 @@ V2_LLM_ROLE=main
 # Explicit: intent classifier uses the fast role.
 V2_LLM_INTENT_ROLE=fast
 V2_LLM_TIMEOUT_S=20
+# Optional: per-role timeout override (seconds), e.g. for slower "thinking" models.
+# V2_LLM_TIMEOUT_S_MAIN=120
 V2_LLM_TEMPERATURE=0
 ```
 
-### Optional: timeouts / fallbacks
+### Optional: timeouts
 
 ```bash
 LLM_TIMEOUT_MS=20000

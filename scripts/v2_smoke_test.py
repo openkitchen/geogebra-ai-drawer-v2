@@ -69,7 +69,9 @@ def _print_run_exception_summary(*, run_id: str, fail_on_exception: bool) -> boo
     if not exc:
         return False
 
+    trace_path = _trace_dir() / f"run-{run_id}.jsonl"
     print(f"WARN: run_id={run_id} recorded {len(exc)} exception(s) in debug trace:")
+    print(f"      trace_file={trace_path}")
     for e in exc[:8]:
         where = (e.get("where") or "").strip() or "<unknown>"
         typ = (e.get("type") or "").strip() or "<unknown>"

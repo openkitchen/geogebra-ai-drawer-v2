@@ -250,43 +250,24 @@ def _parse_csv_env(key: str) -> list[str]:
 
 def _fallback_roles() -> list[str]:
     _maybe_load_env_files()
-
-    explicit = _parse_csv_env("V2_LLM_FALLBACK_ROLES")
-    if explicit:
-        return explicit
-
-    # If v1-style role routing is present, try common roles that might be configured.
-    raw_bindings = os.getenv("LLM_ROLE_BINDINGS_JSON") or ""
-    if raw_bindings.strip():
-        try:
-            expanded = _expand_env_refs(_strip_wrapping_quotes(raw_bindings))
-            bindings = json.loads(expanded)
-        except Exception:
-            bindings = None
-
-        if isinstance(bindings, dict):
-            order = ["fast", "fallback", "repair", "gemini_fast", "gemini_think", "main"]
-            roles = [r for r in order if isinstance(bindings.get(r), str) and r.strip()]
-            if roles:
-                return roles
-
-    # Last resort: try "fast" if aliases exist (even if it may not be bound).
-    if (os.getenv("LLM_MODEL_ALIASES_JSON") or "").strip():
-        return ["fast"]
-
+    # NOTE: Role fallback is intentionally disabled in v2.
+    # If the requested role times out or fails, the run should surface that failure instead of
+    # silently switching to another model/role.
     return []
 
 
 def load_llm_config_for_role(*, role: str | None) -> LlmConfig | None:
     _maybe_load_env_files()
+    resolved_role = (role or os.getenv("V2_LLM_ROLE") or "main").strip() or "main"
 
-    def read_temperature_timeout() -> tuple[float, float]:
+    def read_temperature_timeout(*, resolved_role: str) -> tuple[float, float]:
         try:
             temperature = float(os.getenv("V2_LLM_TEMPERATURE") or "0")
         except ValueError:
             temperature = 0.0
 
-        timeout_env = os.getenv("V2_LLM_TIMEOUT_S") or ""
+        role_timeout_key = f"V2_LLM_TIMEOUT_S_{resolved_role.upper()}"
+        timeout_env = os.getenv(role_timeout_key) or os.getenv("V2_LLM_TIMEOUT_S") or ""
         if not timeout_env:
             timeout_ms = os.getenv("LLM_TIMEOUT_MS") or ""
             if timeout_ms:
@@ -326,7 +307,7 @@ def load_llm_config_for_role(*, role: str | None) -> LlmConfig | None:
             or None
         )
 
-        temperature, timeout_s = read_temperature_timeout()
+        temperature, timeout_s = read_temperature_timeout(resolved_role=resolved_role)
         return LlmConfig(
             api_key=api_key,
             base_url=base_url,
@@ -374,7 +355,7 @@ def load_llm_config_for_role(*, role: str | None) -> LlmConfig | None:
         if provider == "openai-compatible" and not base_url:
             return None
 
-        temperature, timeout_s = read_temperature_timeout()
+        temperature, timeout_s = read_temperature_timeout(resolved_role=resolved_role)
         return LlmConfig(
             api_key=api_key,
             base_url=base_url,
@@ -391,7 +372,6 @@ def load_llm_config_for_role(*, role: str | None) -> LlmConfig | None:
             return explicit_cfg
 
     # 2) Reuse v1-style aliases + role bindings — recommended for local dev.
-    resolved_role = (role or os.getenv("V2_LLM_ROLE") or "main").strip() or "main"
     cfg = load_from_aliases(role=resolved_role)
     if cfg is not None:
         return cfg
@@ -442,7 +422,7 @@ def load_llm_config_for_role(*, role: str | None) -> LlmConfig | None:
             if chosen["provider"] == "openai-compatible" and not chosen["base_url"]:
                 return None
 
-            temperature, timeout_s = read_temperature_timeout()
+            temperature, timeout_s = read_temperature_timeout(resolved_role=resolved_role)
             return LlmConfig(
                 api_key=chosen["api_key"],
                 base_url=chosen["base_url"],
@@ -461,17 +441,8 @@ def load_llm_config_for_role(*, role: str | None) -> LlmConfig | None:
 
 def load_llm_config(role: str | None = None) -> LlmConfig | None:
     # Backward compatible function name used across the codebase.
-    cfg = load_llm_config_for_role(role=role)
-    if cfg is not None or role is not None:
-        return cfg
-
-    # If the default role isn't configured, fall back to any configured role.
-    for r in _fallback_roles():
-        cfg2 = load_llm_config_for_role(role=r)
-        if cfg2 is not None:
-            return cfg2
-
-    return None
+    # NOTE: No fallback behavior. If the requested/default role isn't configured, returns None.
+    return load_llm_config_for_role(role=role)
 
 
 @lru_cache(maxsize=8)
@@ -919,7 +890,7 @@ def generate_geogebra_commands(
     )
 
     roles_to_try = [requested_role] + [r for r in _fallback_roles() if r != requested_role]
-    roles_to_try = roles_to_try[:3]
+    roles_to_try = roles_to_try[:1]
 
     for role in roles_to_try:
         cfg = load_llm_config(role=role)
@@ -1085,7 +1056,7 @@ def generate_final_answer(
     )
 
     roles_to_try = ["main"] + [r for r in _fallback_roles() if r != "main"]
-    roles_to_try = roles_to_try[:3]
+    roles_to_try = roles_to_try[:1]
 
     for role in roles_to_try:
         cfg = load_llm_config(role=role)
