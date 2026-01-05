@@ -30,7 +30,7 @@ POC 阶段建议 **pin 版本**（不要“永远最新版”），升级走小�
 - 可选开启真实 LLM（OpenAI / OpenAI-compatible）：设置 `V2_LLM_API_KEY`（可选 `V2_LLM_BASE_URL`/`V2_LLM_MODEL`/`V2_LLM_TIMEOUT_S`）
 - 或复用 v1 的 `LLM_ENDPOINTS_JSON`（仅支持 `provider=openai/openai-compatible`；优先 `LLM_AUTO_PREFERRED_ENDPOINT_ID`）
 - 推荐：复用 v1 的 `LLM_MODEL_ALIASES_JSON` + `LLM_ROLE_BINDINGS_JSON`（v2 默认使用 role=`main`，可用 `V2_LLM_ROLE` 切换；当前仅支持 `provider=openai/openai-compatible`，role 若指向 `google` 会退回 stub）
-- 可选：按 role 覆盖超时：`V2_LLM_TIMEOUT_S_<ROLE>`（例如 `V2_LLM_TIMEOUT_S_MAIN=60`），否则使用 `V2_LLM_TIMEOUT_S`
+- 可选：按 role 覆盖超时：`V2_LLM_TIMEOUT_S_<ROLE>`（例如 `V2_LLM_TIMEOUT_S_MAIN=120`），否则使用 `V2_LLM_TIMEOUT_S`
 - 默认读取本 worktree 的 `.env.local`；如需复用另一份 env（例如 v1 的 key），请显式设置 `V2_ENV_FILE="../geogebra-ai-drawer/.env.local"`（仅用于补齐缺失值，不覆盖已有配置）
 - 预算事件 `budget` 会同时包含 `tool_calls_*` 与（若启用）`model_calls_*`
 
