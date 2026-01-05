@@ -136,7 +136,7 @@ def main() -> int:
     )
     config = v2_eval_runner.load_config(config_args)
 
-    if args.with_llm_judge and not config.judge_api_key:
+    if args.with_llm_judge and (not config.judge_api_key or not config.judge_base_url or not config.judge_model):
         print(
             "ERR: --with-llm-judge requires judge config via .env.local (LLM_MODEL_ALIASES_JSON + LLM_ROLE_BINDINGS_JSON, with role 'fast' bound to an alias with apiKey/baseURL/modelId).",
             file=sys.stderr,
