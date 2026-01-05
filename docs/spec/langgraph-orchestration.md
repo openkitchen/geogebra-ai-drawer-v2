@@ -207,12 +207,20 @@ UI 不应该只能看到“thinking...”，而应能看到：
 - resume ack（前端结果返回）
 - final answer（对孩子可见的解释）
 
+补充（hard-mode 难题模式）：
+- `difficulty_update`：小模型难度判定（simple/hard + reasons）
+- `phase_update`：阶段化进度（阶段/假设/验证/结果/下一步，均为可公开内容）
+
+详见：`docs/spec/hard-mode.md`。
+
 事件格式建议（内部统一，不要求对齐 LangGraph 原生 event 名称；但要可映射）：
 ```ts
 export type RunStreamEvent =
   | { event: 'run_start'; data: { run_id: string; thread_id: string; protocol_version?: string; llm_enabled?: boolean; llm_model?: string; llm_base_url?: string } }
   | { event: 'node_start'; data: { name: string } }
   | { event: 'plan_update'; data: { plan: Array<{ id: string; text: string; done?: boolean }> } }
+  | { event: 'difficulty_update'; data: { difficulty: 'simple' | 'hard'; hard_mode?: boolean; confidence?: number; reasons?: string[] } }
+  | { event: 'phase_update'; data: { seq: number; phase: string; summary?: string; hypothesis?: string; verification?: string; result?: string; next?: string } }
   | { event: 'token'; data: { text_delta: string } }
   | { event: 'tool_start'; data: { tool_name: string; tool_call_id: string; input: any } }
   | { event: 'interrupt'; data: { kind: 'frontend_tool'; tool_name: string; tool_call_id: string; input: any } }

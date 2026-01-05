@@ -198,6 +198,34 @@ class PlanUpdateEvent(BaseModel):
     data: PlanUpdateData
 
 
+class DifficultyUpdateData(BaseModel):
+    difficulty: Literal["simple", "hard"]
+    hard_mode: bool = False
+    confidence: float | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class DifficultyUpdateEvent(BaseModel):
+    event: Literal["difficulty_update"] = "difficulty_update"
+    data: DifficultyUpdateData
+
+
+class PhaseUpdateData(BaseModel):
+    # A monotonically increasing sequence number per run (UI can sort/merge).
+    seq: int
+    phase: str
+    summary: str | None = None
+    hypothesis: str | None = None
+    verification: str | None = None
+    result: str | None = None
+    next: str | None = None
+
+
+class PhaseUpdateEvent(BaseModel):
+    event: Literal["phase_update"] = "phase_update"
+    data: PhaseUpdateData
+
+
 class TokenEvent(BaseModel):
     event: Literal["token"] = "token"
     data: TokenData
@@ -238,6 +266,8 @@ RunStreamEvent = Union[
     NodeStartEvent,
     NodeEndEvent,
     PlanUpdateEvent,
+    DifficultyUpdateEvent,
+    PhaseUpdateEvent,
     TokenEvent,
     ToolStartEvent,
     InterruptEvent,

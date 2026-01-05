@@ -100,11 +100,26 @@ export type Event9 = 'tool_end';
 export type ToolName3 = string;
 export type ToolCallId3 = string;
 export type Event10 = 'tool_start';
+export type Difficulty = 'simple' | 'hard';
+export type HardMode = boolean;
+export type Confidence = number | null;
+export type Reasons = string[];
+export type Event11 = 'difficulty_update';
+export type Seq = number;
+export type Phase = string;
+export type Summary = string | null;
+export type Hypothesis = string | null;
+export type Verification = string | null;
+export type Result = string | null;
+export type Next = string | null;
+export type Event12 = 'phase_update';
 export type RunStreamEvent =
   | RunStartEvent
   | NodeStartEvent
   | NodeEndEvent
   | PlanUpdateEvent
+  | DifficultyUpdateEvent
+  | PhaseUpdateEvent
   | TokenEvent
   | ToolStartEvent
   | InterruptEvent
@@ -158,6 +173,10 @@ export interface ProtocolV2 {
   ToolStartData?: ToolStartData;
   ToolStartEvent?: ToolStartEvent;
   UIContext?: UIContext;
+  DifficultyUpdateData?: DifficultyUpdateData;
+  DifficultyUpdateEvent?: DifficultyUpdateEvent;
+  PhaseUpdateData?: PhaseUpdateData;
+  PhaseUpdateEvent?: PhaseUpdateEvent;
   RunStreamEvent?: RunStreamEvent;
 }
 export interface BudgetData {
@@ -386,4 +405,27 @@ export interface Input1 {
 export interface ToolStartEvent {
   event: Event10;
   data: ToolStartData;
+}
+export interface DifficultyUpdateData {
+  difficulty: Difficulty;
+  hard_mode?: HardMode;
+  confidence?: Confidence;
+  reasons?: Reasons;
+}
+export interface DifficultyUpdateEvent {
+  event: Event11;
+  data: DifficultyUpdateData;
+}
+export interface PhaseUpdateData {
+  seq: Seq;
+  phase: Phase;
+  summary?: Summary;
+  hypothesis?: Hypothesis;
+  verification?: Verification;
+  result?: Result;
+  next?: Next;
+}
+export interface PhaseUpdateEvent {
+  event: Event12;
+  data: PhaseUpdateData;
 }

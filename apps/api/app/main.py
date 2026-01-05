@@ -285,6 +285,8 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
             try:
                 interrupts_seen = False
                 plan_sent = False
+                difficulty_sent = False
+                last_phase_seq_sent = 0
                 for chunk in graph.stream(input_state, config):
                     interrupts = chunk.get("__interrupt__")
                     if interrupts and not interrupts_seen:
@@ -301,11 +303,30 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
                         if not isinstance(node_out, dict):
                             continue
 
+                        if node_name == "ingest_node" and not difficulty_sent:
+                            diff = node_out.get("difficulty")
+                            if isinstance(diff, str) and diff.strip():
+                                difficulty_payload = {
+                                    "difficulty": diff,
+                                    "hard_mode": bool(node_out.get("hard_mode")),
+                                    "confidence": node_out.get("difficulty_confidence"),
+                                    "reasons": node_out.get("difficulty_reasons") or [],
+                                }
+                                _emit("difficulty_update", difficulty_payload)
+                                difficulty_sent = True
+
                         if node_name == "plan_node" and not plan_sent:
                             plan = node_out.get("plan")
                             if isinstance(plan, list) and plan:
                                 _emit("plan_update", {"plan": plan})
                                 plan_sent = True
+
+                        # Emit safe, structured phase updates for hard-mode (UI-visible; not CoT).
+                        seq = node_out.get("phase_seq")
+                        phase_update = node_out.get("phase_update")
+                        if isinstance(seq, int) and seq > last_phase_seq_sent and isinstance(phase_update, dict) and phase_update:
+                            _emit("phase_update", phase_update)
+                            last_phase_seq_sent = seq
 
                         if "model_calls_used" in node_out:
                             try:

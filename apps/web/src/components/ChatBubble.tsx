@@ -25,12 +25,33 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
   const [showTrace, setShowTrace] = useState(false);
   const events = message.role === 'assistant' ? message.events : null;
 
+  const hardModePanel = useMemo(() => {
+    if (!events || events.length === 0) return null;
+    const difficultyEv = events.find(
+      (e): e is Extract<RunStreamEvent, { event: 'difficulty_update' }> => e.event === 'difficulty_update',
+    );
+    const difficulty = difficultyEv?.data?.difficulty;
+    if (difficulty !== 'hard') return null;
+
+    const reasons = difficultyEv?.data?.reasons ?? [];
+    const phases = events.filter(
+      (e): e is Extract<RunStreamEvent, { event: 'phase_update' }> => e.event === 'phase_update',
+    );
+    const last = phases.length ? phases[phases.length - 1].data : null;
+
+    return {
+      reasons,
+      phases: phases.map((e) => e.data).slice(-12),
+      last,
+    };
+  }, [events]);
+
   // Extract useful info for trace summary
   const toolUsage = useMemo(() => {
     if (!events || events.length === 0) return null;
     const tools = events
-      .filter(e => e.event === 'tool_start')
-      .map(e => (e as any).data.tool_name);
+      .filter((e): e is Extract<RunStreamEvent, { event: 'tool_start' }> => e.event === 'tool_start')
+      .map((e) => e.data.tool_name);
     return tools.length > 0 ? `Tools: ${tools.join(', ')}` : null;
   }, [events]);
 
@@ -57,6 +78,75 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
   return (
     <div className="bubble-row assistant">
       <div className="bubble assistant">
+        {/* Hard-mode user-visible progress (safe; no private chain-of-thought). */}
+        {hardModePanel ? (
+          <details style={{ marginBottom: 10 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#475569' }}>
+              思考进度（难题模式）
+              {hardModePanel.last?.phase ? `：${hardModePanel.last.phase}` : ''}
+            </summary>
+            <div style={{ marginTop: 8, fontSize: 12, color: '#334155', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {hardModePanel.reasons.length ? (
+                <div>
+                  <strong>判定原因：</strong>
+                  {hardModePanel.reasons.join('、')}
+                </div>
+              ) : null}
+
+              {hardModePanel.last ? (
+                <>
+                  {hardModePanel.last.summary ? (
+                    <div>
+                      <strong>当前：</strong>
+                      {hardModePanel.last.summary}
+                    </div>
+                  ) : null}
+                  {hardModePanel.last.hypothesis ? (
+                    <div>
+                      <strong>假设：</strong>
+                      {hardModePanel.last.hypothesis}
+                    </div>
+                  ) : null}
+                  {hardModePanel.last.verification ? (
+                    <div>
+                      <strong>验证：</strong>
+                      {hardModePanel.last.verification}
+                    </div>
+                  ) : null}
+                  {hardModePanel.last.result ? (
+                    <div>
+                      <strong>结果：</strong>
+                      {hardModePanel.last.result}
+                    </div>
+                  ) : null}
+                  {hardModePanel.last.next ? (
+                    <div>
+                      <strong>下一步：</strong>
+                      {hardModePanel.last.next}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div style={{ color: '#64748b', fontStyle: 'italic' }}>（等待进度事件…）</div>
+              )}
+
+              {hardModePanel.phases.length > 1 ? (
+                <details style={{ marginTop: 6 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 11, color: '#64748b' }}>查看最近阶段记录</summary>
+                  <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {hardModePanel.phases.map((p) => (
+                      <div key={String(p.seq)} style={{ fontFamily: 'monospace', fontSize: 11 }}>
+                        <span style={{ color: '#94a3b8' }}>#{p.seq}</span> {p.phase}
+                        {p.summary ? <span style={{ color: '#64748b' }}> · {p.summary}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          </details>
+        ) : null}
+
         {/* Dev Mode Trace Info (Folded by default) - Always show if devMode is on, even if events is empty */}
         {devMode && (
           <div className="trace-details">

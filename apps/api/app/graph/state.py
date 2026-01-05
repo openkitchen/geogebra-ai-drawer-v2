@@ -16,6 +16,16 @@ class GraphState(TypedDict, total=False):
     memory_summary: str
     memory_messages: list[dict[str, Any]]
     intent: dict[str, Any]
+    # Difficulty routing (small model; required in v2 hard-mode work).
+    difficulty: Literal["simple", "hard"]
+    difficulty_confidence: float
+    difficulty_reasons: list[str]
+    hard_mode: bool
+    # Safe, UI-visible phase updates (NOT private chain-of-thought).
+    phase_seq: int
+    phase_update: dict[str, Any]
+    # Fatal error short-circuit (fail-fast for required components like classifier).
+    fatal_error: dict[str, Any]
     tool_calls_used: int
     tool_calls_limit: int
     model_calls_used: int
@@ -42,5 +52,4 @@ class GraphState(TypedDict, total=False):
     next_tool_input: Any
     tool_results: list[dict[str, Any]]
     answer_text: str
-
 

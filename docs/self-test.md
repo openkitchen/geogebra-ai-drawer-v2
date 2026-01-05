@@ -110,6 +110,12 @@ export V2_TRACE_DIR="/absolute/path/to/logs"
 你在 `run-<run_id>.jsonl` 里会看到：
 - `kind="llm"`：记录每次 LLM 调用的开始/结束、耗时、返回摘要（以及是否走 fallback）
 - `kind="exception"`：记录 LLM 调用异常（例如 401/429/5xx/超时等）
+- `kind="sse"`：记录 SSE 事件（包含 `difficulty_update` / `phase_update` / tool_start/tool_end/final 等），便于定位“难题模式”的阶段走向
+
+快速摘要查看（推荐）：
+```bash
+python3 scripts/v2_trace_inspect.py --run-id "<run_id>"
+```
 
 ### LangSmith tracing（可选，推荐用于 RCA）
 

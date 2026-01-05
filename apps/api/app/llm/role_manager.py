@@ -53,7 +53,7 @@ class RoleManager:
             out[name] = RoleMetadata(name=name, capability_tier=cap, preferred_for=pf)
 
         # Safe defaults that match current behavior expectations.
-        add("fast", "basic", ["intent", "summary", "plan"])
+        add("fast", "basic", ["intent", "summary", "plan", "difficulty"])
         add("main", "advanced", ["command_gen", "final_answer"])
         add("repair", "advanced", ["repair"])
         add("fallback", "standard", ["final_answer", "command_gen"])
@@ -103,5 +103,4 @@ _ROLE_MANAGER = RoleManager()
 
 def select_role(*, scenario: str, min_capability: Capability = "basic") -> str:
     return _ROLE_MANAGER.select_role(scenario=scenario, min_capability=min_capability)
-
 
