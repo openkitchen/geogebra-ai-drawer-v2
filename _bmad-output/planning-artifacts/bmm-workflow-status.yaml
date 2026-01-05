@@ -34,7 +34,7 @@ workflow_status:
     command: "/bmad:bmm:workflows:document-project"
     output: Comprehensive project documentation
     purpose: Understand existing codebase before planning
-    status: conditional
+    status: docs/index.md
 - phase: 1
   name: Analysis (Optional)
   optional: true

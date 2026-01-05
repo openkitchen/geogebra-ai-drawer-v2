@@ -1,0 +1,207 @@
+{
+  "workflow_version": "1.2.0",
+  "timestamps": {
+    "started": "2026-01-05T10:34:53.597596Z",
+    "last_updated": "2026-01-05T10:43:49.135924Z",
+    "completed": "2026-01-05T10:43:49.135924Z"
+  },
+  "mode": "initial_scan",
+  "scan_level": "quick",
+  "project_root": "/Users/wei/workspaces/openkitchen/geogebra-ai-drawer-v2",
+  "output_folder": "/Users/wei/workspaces/openkitchen/geogebra-ai-drawer-v2/docs",
+  "completed_steps": [
+    {
+      "step": "step_1",
+      "status": "completed",
+      "timestamp": "2026-01-05T10:43:49.135924Z",
+      "summary": "Classified as monorepo with 2 parts"
+    },
+    {
+      "step": "step_2",
+      "status": "completed",
+      "timestamp": "2026-01-05T10:43:49.135924Z",
+      "summary": "Found 4 existing docs"
+    },
+    {
+      "step": "step_3",
+      "status": "completed",
+      "timestamp": "2026-01-05T10:43:49.135924Z",
+      "summary": "Tech stack identified (React/Vite + FastAPI/LangGraph)"
+    },
+    {
+      "step": "step_9",
+      "status": "completed",
+      "timestamp": "2026-01-05T10:43:49.135924Z",
+      "summary": "Supporting docs written (13 files)"
+    },
+    {
+      "step": "step_10",
+      "status": "completed",
+      "timestamp": "2026-01-05T10:43:49.135924Z",
+      "summary": "index.md written"
+    },
+    {
+      "step": "step_12",
+      "status": "completed",
+      "timestamp": "2026-01-05T10:43:49.135924Z",
+      "summary": "Workflow complete"
+    }
+  ],
+  "current_step": "completed",
+  "findings": {
+    "project_classification": {
+      "repository_type": "monorepo",
+      "parts_count": 2,
+      "parts": [
+        {
+          "part_id": "web",
+          "name": "Web UI",
+          "root_path": "apps/web",
+          "project_type_id": "web"
+        },
+        {
+          "part_id": "api",
+          "name": "API",
+          "root_path": "apps/api",
+          "project_type_id": "backend"
+        }
+      ]
+    },
+    "technology_stack": {
+      "root": {
+        "scripts": [
+          "setup",
+          "doctor",
+          "dev:client",
+          "dev:server",
+          "dev",
+          "dev:v2:web",
+          "dev:v2:api",
+          "dev:v2",
+          "acceptance:v2:web",
+          "build",
+          "preview",
+          "start"
+        ]
+      },
+      "web": {
+        "framework": "React",
+        "bundler": "Vite",
+        "dependencies": [
+          "react",
+          "react-dom"
+        ]
+      },
+      "api": {
+        "framework": "FastAPI",
+        "runtime": "LangGraph",
+        "python": ">=3.11"
+      }
+    },
+    "api_surface": {
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/healthz",
+          "handler": "healthz"
+        },
+        {
+          "method": "GET",
+          "path": "/api/schema/v2",
+          "handler": "get_schema_v2"
+        },
+        {
+          "method": "GET",
+          "path": "/api/graph/v2/mermaid",
+          "handler": "get_langgraph_mermaid"
+        },
+        {
+          "method": "GET",
+          "path": "/api/graph/v2/mermaid.png",
+          "handler": "get_langgraph_mermaid_png"
+        },
+        {
+          "method": "POST",
+          "path": "/api/threads",
+          "handler": "create_thread"
+        },
+        {
+          "method": "GET",
+          "path": "/api/threads/{thread_id}/state",
+          "handler": "get_thread_state"
+        },
+        {
+          "method": "GET",
+          "path": "/api/threads/{thread_id}/state/history",
+          "handler": "get_thread_state_history"
+        },
+        {
+          "method": "POST",
+          "path": "/api/threads/{thread_id}/runs/stream",
+          "handler": "run_stream"
+        },
+        {
+          "method": "POST",
+          "path": "/api/threads/{thread_id}/runs/{run_id}/resume",
+          "handler": "resume_run"
+        }
+      ],
+      "sse_events": [
+        "budget",
+        "final",
+        "interrupt",
+        "node_end",
+        "node_start",
+        "run_end",
+        "run_start",
+        "token",
+        "tool_end",
+        "tool_start"
+      ]
+    },
+    "generated_files": [
+      "project-overview.md",
+      "architecture-web.md",
+      "architecture-api.md",
+      "api-contracts-api.md",
+      "component-inventory-web.md",
+      "development-guide-web.md",
+      "development-guide-api.md",
+      "integration-architecture.md",
+      "deployment-guide.md",
+      "data-models-api.md",
+      "source-tree-analysis.md",
+      "project-parts.json",
+      "index.md"
+    ]
+  },
+  "outputs_generated": [
+    "project-scan-report.json",
+    "project-overview.md",
+    "architecture-web.md",
+    "architecture-api.md",
+    "api-contracts-api.md",
+    "component-inventory-web.md",
+    "development-guide-web.md",
+    "development-guide-api.md",
+    "integration-architecture.md",
+    "deployment-guide.md",
+    "data-models-api.md",
+    "source-tree-analysis.md",
+    "project-parts.json",
+    "index.md"
+  ],
+  "resume_instructions": "Starting from step 1",
+  "project_types": [
+    {
+      "part_id": "web",
+      "project_type_id": "web",
+      "display_name": "Web UI"
+    },
+    {
+      "part_id": "api",
+      "project_type_id": "backend",
+      "display_name": "API"
+    }
+  ]
+}

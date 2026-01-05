@@ -1,0 +1,36 @@
+{
+  "repository_type": "monorepo",
+  "architecture_type": "Split frontend (React/Vite) + backend (FastAPI/LangGraph) with SSE streaming and interrupt/resume",
+  "parts": [
+    {
+      "part_id": "web",
+      "name": "Web UI",
+      "root_path": "apps/web",
+      "project_type_id": "web"
+    },
+    {
+      "part_id": "api",
+      "name": "API",
+      "root_path": "apps/api",
+      "project_type_id": "backend"
+    }
+  ],
+  "integration_points": [
+    {
+      "from": "web",
+      "to": "api",
+      "type": "http+sse",
+      "paths": [
+        "/api/threads",
+        "/api/threads/{thread_id}/runs/stream",
+        "/api/threads/{thread_id}/runs/{run_id}/resume"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "geogebra",
+      "type": "embed",
+      "details": "Loads deployggb.js and uses GeoGebra Apps API to execute commands"
+    }
+  ]
+}
