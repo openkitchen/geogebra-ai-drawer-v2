@@ -1,12 +1,12 @@
 # Implementation Plan: Dynamic Refinement
 
-## Phase 1: Context Awareness & Basic Refinement (Backend Focus)
+## Phase 1: Context Awareness & Basic Refinement (Backend Focus) [checkpoint: 5bd8559]
 
-- [ ] Task: 分析现有 API 的状态管理，确保 Canvas State 能准确传回给 LLM
-- [ ] Task: 更新后端 Prompt，使其能够识别针对已有对象的修改指令
-- [ ] Task: 为基础修改操作编写单元测试（测试覆盖率 >30%）
-- [ ] Task: 实现基础的微调指令转换（如移动点、更改线段长度）
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Context Awareness' (Protocol in workflow.md)
+- [x] Task: 分析现有 API 的状态管理，确保 Canvas State 能准确传回给 LLM
+- [x] Task: 更新后端 Prompt，使其能够识别针对已有对象的修改指令
+- [x] Task: 为基础修改操作编写单元测试（测试覆盖率 >30%）
+- [x] Task: 实现基础的微调指令转换（如移动点、更改线段长度）
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Context Awareness' (Protocol in workflow.md)
 
 ## Phase 2: AI Explanation & Natural Language Optimization
 
