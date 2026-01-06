@@ -272,7 +272,9 @@ def _invoke_openai_stream_text(
         took_ms = int((time.time() - t0) * 1000)
         reasoning_meta = None
         if run_id:
-            reasoning_meta = trace_reasoning_to_file(run_id=run_id, op=op, role=role, text=reasoning_total)
+            reasoning_meta = trace_reasoning_to_file(
+                run_id=run_id, ui_debug=ui_debug, op=op, role=role, text=reasoning_total
+            )
         include_reasoning_preview = reasoning_meta is not None
 
         _trace_llm_event(

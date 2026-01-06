@@ -304,7 +304,7 @@ class LlmClient:
                             reasoning_meta = None
                             if self._run_id:
                                 reasoning_meta = trace_reasoning_to_file(
-                                    run_id=self._run_id, op=op, role=role, text=reasoning_total
+                                    run_id=self._run_id, ui_debug=self._ui_debug, op=op, role=role, text=reasoning_total
                                 )
                             include_reasoning_preview = reasoning_meta is not None
 
@@ -425,7 +425,9 @@ class LlmClient:
                 if (not reasoning_text.strip()) and isinstance(thinking_content, str):
                     reasoning_text = thinking_content
                 if self._run_id:
-                    reasoning_meta = trace_reasoning_to_file(run_id=self._run_id, op=op, role=role, text=reasoning_text)
+                    reasoning_meta = trace_reasoning_to_file(
+                        run_id=self._run_id, ui_debug=self._ui_debug, op=op, role=role, text=reasoning_text
+                    )
                     if self._ui_debug and self._run_id:
                         trace_line(
                             run_id=self._run_id,
@@ -498,7 +500,9 @@ class LlmClient:
             main_text = content.strip() if isinstance(content, str) and content.strip() else ""
 
             if self._run_id:
-                trace_reasoning_to_file(run_id=self._run_id, op=op, role=role, text=(thinking_content or ""))
+                trace_reasoning_to_file(
+                    run_id=self._run_id, ui_debug=self._ui_debug, op=op, role=role, text=(thinking_content or "")
+                )
             
             # Combine thinking content with main content if available
             if isinstance(thinking_content, str) and thinking_content.strip():

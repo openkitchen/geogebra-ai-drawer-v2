@@ -125,12 +125,13 @@ with tempfile.TemporaryDirectory() as td:
 
     # Disabled by default
     os.environ.pop("V2_TRACE_REASONING", None)
-    assert trace_reasoning_to_file(run_id="r0", op="op", role="role", text="abc") is None
+    assert trace_reasoning_to_file(run_id="r0", ui_debug=False, op="op", role="role", text="abc") is None
+    assert trace_reasoning_to_file(run_id="r0", ui_debug=True, op="op", role="role", text="abc") is not None
 
     # Enabled + truncation behavior
     os.environ["V2_TRACE_REASONING"] = "1"
     os.environ["V2_TRACE_REASONING_MAX_CHARS"] = "10000"
-    meta = trace_reasoning_to_file(run_id="r1", op="op", role="role", text=("a" * 10050))
+    meta = trace_reasoning_to_file(run_id="r1", ui_debug=False, op="op", role="role", text=("a" * 10050))
     assert isinstance(meta, dict) and meta.get("reasoning_file"), meta
     p = pathlib.Path(str(meta["reasoning_file"]))
     assert p.exists(), p

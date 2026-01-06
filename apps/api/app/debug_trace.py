@@ -47,9 +47,10 @@ def _trace_dir(ui_debug: bool) -> Path | None:
     return _repo_root() / "logs" / "v2"
 
 
-def _trace_reasoning_enabled() -> bool:
-    # Must be explicitly enabled. This may contain raw chain-of-thought from the provider.
-    return _parse_bool_env("V2_TRACE_REASONING", default=False)
+def _trace_reasoning_enabled(*, ui_debug: bool) -> bool:
+    # Default ON in ui_debug mode (dev UX), but allow overriding via env.
+    # This may contain raw chain-of-thought from the provider.
+    return _parse_bool_env("V2_TRACE_REASONING", default=ui_debug)
 
 
 def _trace_reasoning_max_chars() -> int:
@@ -63,12 +64,14 @@ def _trace_reasoning_max_chars() -> int:
     return max(10_000, min(v, 2_000_000))
 
 
-def trace_reasoning_to_file(*, run_id: str, op: str, role: str, text: str) -> dict[str, Any] | None:
+def trace_reasoning_to_file(
+    *, run_id: str, ui_debug: bool, op: str, role: str, text: str
+) -> dict[str, Any] | None:
     """Persist continuous reasoning text to a sidecar file (dev-only).
 
     Returns a small metadata dict suitable for JSONL traces, or None if not enabled.
     """
-    if not _trace_reasoning_enabled():
+    if not _trace_reasoning_enabled(ui_debug=ui_debug):
         return None
     if not run_id:
         return None
