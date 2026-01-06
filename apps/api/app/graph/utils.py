@@ -128,7 +128,7 @@ def summarize_last_delete(state: GraphState) -> str | None:
 
 def render_draw_failure_answer(state: GraphState) -> str:
     """Render answer text when drawing failed."""
-    base = "我这次没能把图形画对，但我已经把画板清理干净了。你可以再发一次同样的需求，我会换一种更稳的作图方法。"
+    base = "真抱歉，我这次没能把图形画对。我已经把画板清理干净了，别担心，你可以尝试换一种描述方式再发给我，我们再试一次！"
     if not bool(state.get("ui_debug")):
         return base
 
