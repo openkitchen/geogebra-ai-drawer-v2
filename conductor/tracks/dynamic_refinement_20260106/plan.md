@@ -8,13 +8,13 @@
 - [x] Task: 实现基础的微调指令转换（如移动点、更改线段长度）
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Context Awareness' (Protocol in workflow.md)
 
-## Phase 2: AI Explanation & Natural Language Optimization
+## Phase 2: AI Explanation & Natural Language Optimization [checkpoint: 00ebb8f]
 
-- [ ] Task: 引入“初中助教”风格的 Response Generator
-- [ ] Task: 在 LangGraph 工作流中加入解释生成的环节
-- [ ] Task: 编写针对“解释文本风格”的评估脚本或测试
-- [ ] Task: 优化中英文术语混用的处理逻辑
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: AI Explanation' (Protocol in workflow.md)
+- [x] Task: 引入“初中助教”风格的 Response Generator
+- [x] Task: 在 LangGraph 工作流中加入解释生成的环节
+- [x] Task: 编写针对“解释文本风格”的评估脚本或测试
+- [x] Task: 优化中英文术语混用的处理逻辑
+- [x] Task: Conductor - User Manual Verification 'Phase 2: AI Explanation' (Protocol in workflow.md)
 
 ## Phase 3: Frontend Integration & Polish
 
