@@ -9,6 +9,11 @@
 ## Working agreements
 - 回复使用中文；代码/注释使用英文；文档按项目要求（见 `docs/`）。
 
+## Agent 身份（必填）
+- 在执行任何指令（包括运行命令、修改代码/文档、创建/更新 bd issue）之前，agent 必须先确认自己的名字；如不确定，必须向用户询问并等待确认。
+- 允许的名字只有：`codex-A`、`codex-B`、`wei`。
+- 确认后应保持一致：用于 `BD_ACTOR=<agent_name>`，以及 `bd ... --assignee <agent_name>` 的任务归属。
+
 ## Onboarding（先读这些）
 - `docs/design/overview.md`、`docs/design/decisions.md`：产品目标、LLM 优先取舍、不能由前端硬编码替代的边界。
 - `docs/spec/prompt-contract.md`、`docs/spec/runtime-feedback-repair.md`：LLM 输出契约与错误闭环。
