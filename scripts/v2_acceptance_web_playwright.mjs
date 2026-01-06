@@ -178,9 +178,19 @@ async function run() {
   let page = null;
   try {
     if (startServers) {
+      // Avoid leaking local proxy env into the dev server process. Some environments set ALL_PROXY to a SOCKS proxy,
+      // which makes httpx require optional socks dependencies (socksio) and can break LLM calls.
+      const env = { ...process.env, WEB_PORT: String(webPort), API_PORT: String(apiPort) };
+      delete env.ALL_PROXY;
+      delete env.all_proxy;
+      delete env.HTTP_PROXY;
+      delete env.http_proxy;
+      delete env.HTTPS_PROXY;
+      delete env.https_proxy;
+
       devProc = spawn(path.join(rootDir, 'scripts', 'v2_dev.sh'), {
         cwd: rootDir,
-        env: { ...process.env, WEB_PORT: String(webPort), API_PORT: String(apiPort) },
+        env,
         stdio: 'inherit',
       });
     }

@@ -205,15 +205,17 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
                       {events.map((ev, idx) => {
                         // Show token events in dev mode (collapsed by default)
                         if (ev.event === 'token') {
-                          const channel = ev.data.channel ?? 'content';
-                          const len = ev.data.text_delta?.length ?? 0;
+                          const channel = ev.data.channel ?? 'meta';
+                          const text = ev.data.text_delta ?? '';
+                          const len = text.length ?? 0;
+                          const showText = channel !== 'reasoning';
                           return (
                             <details key={idx} style={{ fontSize: 10 }}>
                               <summary style={{ cursor: 'pointer', color: '#64748b' }}>
                                 [token:{channel}] len={len}
                               </summary>
                               <div style={{ marginTop: 4, padding: 4, background: '#f8fafc', borderRadius: 4, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
-                                (hidden)
+                                {showText ? (text || '(empty)') : '(hidden; traced to file when ui_debug=true)'}
                               </div>
                             </details>
                           );

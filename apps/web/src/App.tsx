@@ -46,12 +46,16 @@ export default function App() {
     const last = messages.length ? messages[messages.length - 1] : null;
     return last && last.role === 'assistant' ? last.status : null;
   })();
+  const lastAssistantTextLen = (() => {
+    const last = messages.length ? messages[messages.length - 1] : null;
+    return last && last.role === 'assistant' ? last.text.length : 0;
+  })();
 
   useEffect(() => {
     const el = messagesRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages.length, lastAssistantStatus]); // Also scroll on status change
+  }, [messages.length, lastAssistantStatus, lastAssistantTextLen]); // Also scroll on streaming text/status changes
 
   // Focus input on load and after busy
   useEffect(() => {
@@ -153,6 +157,14 @@ export default function App() {
             const nextEvents = [...m.events, ev];
             if (ev.event === 'final') {
               return { ...m, events: nextEvents, text: ev.data.answer.explanation };
+            }
+            if (ev.event === 'token') {
+              const channel = ev.data.channel ?? 'meta';
+              if (channel === 'content') {
+                const delta = ev.data.text_delta ?? '';
+                return { ...m, events: nextEvents, text: (m.text ?? '') + delta };
+              }
+              return { ...m, events: nextEvents };
             }
             if (ev.event === 'run_end') {
               return { ...m, events: nextEvents, status: 'done' };

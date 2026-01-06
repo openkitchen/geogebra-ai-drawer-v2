@@ -249,7 +249,7 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
         yield _sse("node_start", {"name": "ingest_node"})
 
         await asyncio.sleep(0.05)
-        token_payload = {"text_delta": "（v2 llm）准备开始…" if llm_enabled else "（v2 stub）准备开始…"}
+        token_payload = {"text_delta": "（v2 llm）准备开始…" if llm_enabled else "（v2 stub）准备开始…", "channel": "meta"}
         trace_sse(run_id=run_id, ui_debug=ui_debug, event="token", data=token_payload)
         yield _sse("token", token_payload)
         await asyncio.sleep(0.05)
@@ -523,7 +523,7 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
         trace_sse(run_id=run_id, ui_debug=ui_debug, event="budget", data=budget_payload)
         yield _sse("budget", budget_payload)
 
-        token_payload = {"text_delta": "（v2 llm）已收到工具结果，继续…" if llm_enabled else "（v2 stub）已收到工具结果，继续…"}
+        token_payload = {"text_delta": "（v2 llm）已收到工具结果，继续…" if llm_enabled else "（v2 stub）已收到工具结果，继续…", "channel": "meta"}
         trace_sse(run_id=run_id, ui_debug=ui_debug, event="token", data=token_payload)
         yield _sse("token", token_payload)
         await asyncio.sleep(0.05)
