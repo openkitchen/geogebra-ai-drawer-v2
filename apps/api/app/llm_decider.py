@@ -11,10 +11,9 @@ from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from openai import OpenAI
 from pydantic import BaseModel, ValidationError, model_validator
 
-from .debug_trace import trace_exception, trace_line, trace_reasoning_to_file
+from .debug_trace import trace_exception, trace_line
 from .protocol_v2 import (
     DeleteObjectsInput,
     ExecGeogebraCommandsInput,
@@ -119,32 +118,6 @@ def _build_runnable_config(*, run_id: str | None, op: str, role: str) -> dict[st
     }
 
 
-def _lc_messages_to_openai(messages_in: list[Any]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for m in messages_in:
-        m_type = getattr(m, "type", None)  # e.g. "system" | "human" | "ai" | "tool"
-        content = getattr(m, "content", None)
-        if not isinstance(content, str):
-            content = str(content) if content is not None else ""
-
-        role_name = "user"
-        if m_type == "system":
-            role_name = "system"
-        elif m_type == "human":
-            role_name = "user"
-        elif m_type == "ai":
-            role_name = "assistant"
-        elif m_type == "tool":
-            role_name = "tool"
-
-        msg: dict[str, Any] = {"role": role_name, "content": content}
-        tool_call_id = getattr(m, "tool_call_id", None)
-        if role_name == "tool" and isinstance(tool_call_id, str) and tool_call_id:
-            msg["tool_call_id"] = tool_call_id
-        out.append(msg)
-    return out
-
-
 def _invoke_openai_stream_text(
     *,
     cfg: LlmConfig,
@@ -155,7 +128,7 @@ def _invoke_openai_stream_text(
     ui_debug: bool,
     send_tokens: bool,
 ) -> str | None:
-    """Stream a completion via OpenAI-compatible API, and wait until the stream ends.
+    """Stream a completion via LangChain ChatOpenAI, and wait until the stream ends.
 
     IMPORTANT: do not stop early even if we already saw a JSON object. We must read until
     the provider finishes output, otherwise some providers (e.g. Kimi) may behave poorly.
@@ -171,18 +144,9 @@ def _invoke_openai_stream_text(
     else:
         token_mgr = None
 
-    try:
-        client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url, timeout=cfg.timeout_s)
-    except TypeError:
-        # Backward-compat for older SDK signatures.
-        client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
-
-    openai_messages = _lc_messages_to_openai(messages)
-
     t0 = time.time()
     first_token_ms: int | None = None
     content_total = ""
-    reasoning_total = ""
     chunk_count = 0
 
     _trace_llm_event(
@@ -194,88 +158,68 @@ def _invoke_openai_stream_text(
             "model": cfg.model,
             "base_url": cfg.base_url,
             "timeout_s": cfg.timeout_s,
-            "messages": [{"role": m.get("role"), "content_len": len(str(m.get("content") or ""))} for m in openai_messages],
+            "messages": [
+                {"type": getattr(m, "type", None), "content_len": len(str(getattr(m, "content", "") or ""))}
+                for m in messages
+            ],
         },
     )
 
-    def _create_stream(*, with_usage: bool) -> Any:
-        kwargs: dict[str, Any] = {
-            "model": cfg.model,
-            "messages": openai_messages,
-            "temperature": cfg.temperature,
-            "stream": True,
-        }
-        if with_usage:
-            kwargs["stream_options"] = {"include_usage": True}
-        return client.chat.completions.create(**kwargs)
-
     try:
-        stream_resp = _create_stream(with_usage=True)
+        llm = _build_llm(
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            model=cfg.model,
+            temperature=cfg.temperature,
+            timeout_s=cfg.timeout_s,
+        )
     except Exception as e:
-        # Some gateways don't support stream_options; keep streaming but drop usage.
         if run_id:
-            trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"openai_stream.create[{op}][{role}]", exc=e)
-        try:
-            stream_resp = _create_stream(with_usage=False)
-        except Exception as e2:
-            if run_id:
-                trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"openai_stream.create_fallback[{op}][{role}]", exc=e2)
-            return None
+            trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"langchain_stream.build[{op}][{role}]", exc=e)
+        return None
+
+    runnable_config = _build_runnable_config(run_id=run_id, op=op, role=role)
+
+    # Note: ChatOpenAI streaming yields message chunks with standard `content` deltas.
+    # Non-standard delta fields like `reasoning_content` are not available here.
+    last_usage: dict[str, Any] | None = None
 
     try:
-        for chunk in stream_resp:
+        stream_gen = llm.stream(messages, config=runnable_config)
+        for chunk in stream_gen:
             chunk_count += 1
-            try:
-                choices = getattr(chunk, "choices", None)
-                if not choices:
-                    continue
-                delta_obj = getattr(choices[0], "delta", None)
-            except Exception:
+
+            last_usage = _extract_usage_metadata(chunk) or last_usage
+
+            delta = getattr(chunk, "content", None)
+            if isinstance(delta, list):
+                # Defensive: some models may emit structured blocks. Our UI expects plain text.
+                delta = "".join(str(x) for x in delta)
+            if not isinstance(delta, str) or not delta:
                 continue
 
-            delta_dict: dict[str, Any] = {}
-            try:
-                if delta_obj is not None:
-                    delta_dict = delta_obj.model_dump(exclude_none=True)  # type: ignore[attr-defined]
-            except Exception:
-                delta_dict = {}
+            if first_token_ms is None:
+                first_token_ms = int((time.time() - t0) * 1000)
+                _trace_llm_event(
+                    run_id=run_id,
+                    ui_debug=ui_debug,
+                    name=f"{op}.first_token",
+                    data={"role": role, "first_token_ms": first_token_ms, "chunks_before_first_token": chunk_count},
+                )
 
-            content_delta = delta_dict.get("content")
-            if isinstance(content_delta, str) and content_delta:
-                if first_token_ms is None:
-                    first_token_ms = int((time.time() - t0) * 1000)
-                    _trace_llm_event(
-                        run_id=run_id,
-                        ui_debug=ui_debug,
-                        name=f"{op}.first_token",
-                        data={"role": role, "first_token_ms": first_token_ms, "chunks_before_first_token": chunk_count},
-                    )
-                if token_mgr is not None and run_id:
-                    try:
-                        token_mgr.send_token(run_id, content_delta, channel="content")
-                    except Exception:
-                        pass
-                content_total += content_delta
+            if token_mgr is not None and run_id:
+                try:
+                    token_mgr.send_token(run_id, delta, channel="content")
+                except Exception:
+                    pass
 
-            reasoning_delta = (
-                delta_dict.get("reasoning_content")
-                or delta_dict.get("reasoning")
-                or delta_dict.get("thinking")
-            )
-            if isinstance(reasoning_delta, str) and reasoning_delta:
-                reasoning_total += reasoning_delta
+            content_total += delta
     except Exception as e:
         if run_id:
-            trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"openai_stream.iter[{op}][{role}]", exc=e)
+            trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"langchain_stream.iter[{op}][{role}]", exc=e)
         return None
     finally:
         took_ms = int((time.time() - t0) * 1000)
-        reasoning_meta = None
-        if run_id:
-            reasoning_meta = trace_reasoning_to_file(
-                run_id=run_id, ui_debug=ui_debug, op=op, role=role, text=reasoning_total
-            )
-        include_reasoning_preview = reasoning_meta is not None
 
         _trace_llm_event(
             run_id=run_id,
@@ -287,10 +231,10 @@ def _invoke_openai_stream_text(
                 "chunks": chunk_count,
                 "first_token_ms": first_token_ms,
                 "content_len": len(content_total),
-                "reasoning_len": len(reasoning_total),
-                # Optional: for local debugging only (must be explicitly enabled).
-                "reasoning_preview": (reasoning_total[:240] if include_reasoning_preview else None),
-                **(reasoning_meta or {}),
+                "reasoning_len": 0,
+                "reasoning_preview": None,
+                "reasoning_file": None,
+                "usage": last_usage,
             },
         )
 
