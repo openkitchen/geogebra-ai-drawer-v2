@@ -206,6 +206,36 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
                             </details>
                           );
                         }
+
+                        if (ev.event === 'difficulty_update') {
+                          return (
+                            <div key={idx} style={{ fontFamily: 'monospace', color: '#334155' }}>
+                              <span style={{ color: '#94a3b8', marginRight: 6 }}>[difficulty_update]</span>
+                              <span style={{ color: '#0f172a', fontWeight: 600 }}>difficulty={ev.data.difficulty}</span>
+                              <span style={{ color: '#64748b', marginLeft: 8 }}>
+                                hard_mode={String(ev.data.hard_mode)}
+                                {typeof ev.data.confidence === 'number' ? ` confidence=${ev.data.confidence.toFixed(2)}` : ''}
+                              </span>
+                              {Array.isArray(ev.data.reasons) && ev.data.reasons.length > 0 ? (
+                                <span style={{ color: '#64748b', marginLeft: 8 }}>
+                                  reasons={ev.data.reasons.join('、')}
+                                </span>
+                              ) : null}
+                            </div>
+                          );
+                        }
+
+                        if (ev.event === 'phase_update') {
+                          return (
+                            <div key={idx} style={{ fontFamily: 'monospace', color: '#334155' }}>
+                              <span style={{ color: '#94a3b8', marginRight: 6 }}>[phase_update]</span>
+                              <span style={{ color: '#0f172a', fontWeight: 500 }}>
+                                #{ev.data.seq} {ev.data.phase}
+                              </span>
+                              {ev.data.summary ? <span style={{ color: '#64748b', marginLeft: 6 }}>· {ev.data.summary}</span> : null}
+                            </div>
+                          );
+                        }
                         return (
                           <div key={idx} style={{ fontFamily: 'monospace', color: '#334155' }}>
                             <span style={{ color: '#94a3b8', marginRight: 6 }}>[{ev.event}]</span>
