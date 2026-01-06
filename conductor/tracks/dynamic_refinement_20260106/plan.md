@@ -16,9 +16,9 @@
 - [x] Task: 优化中英文术语混用的处理逻辑
 - [x] Task: Conductor - User Manual Verification 'Phase 2: AI Explanation' (Protocol in workflow.md)
 
-## Phase 3: Frontend Integration & Polish
+## Phase 3: Frontend Integration & Polish [checkpoint: b896a42]
 
-- [ ] Task: 更新前端 Web UI，使其能流畅展示 AI 的连续操作和解释
-- [ ] Task: 实现前端对绘图错误的友好弹窗提醒
-- [ ] Task: 编写 Playwright 验收测试，模拟初中生对话场景
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Frontend Integration' (Protocol in workflow.md)
+- [x] Task: 更新前端 Web UI，使其能流畅展示 AI 的连续操作和解释
+- [x] Task: 实现前端对绘图错误的友好弹窗提醒
+- [x] Task: 编写 Playwright 验收测试，模拟初中生对话场景
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Frontend Integration' (Protocol in workflow.md)
