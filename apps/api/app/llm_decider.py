@@ -668,7 +668,7 @@ def _compact_canvas_objects(tool_results: list[dict[str, Any]] | None) -> list[d
             continue
 
         compact: list[dict[str, Any]] = []
-        for obj in objects[:12]:
+        for obj in objects[:30]:
             if not isinstance(obj, dict):
                 continue
             compact.append(
@@ -694,7 +694,7 @@ def _compact_exec_commands(tool_results: list[dict[str, Any]] | None) -> list[st
             continue
         tool_input = entry.get("input")
         if isinstance(tool_input, dict) and isinstance(tool_input.get("commands"), list):
-            return [str(x) for x in tool_input.get("commands")[:12]]
+            return [str(x) for x in tool_input.get("commands")[:30]]
 
     return []
 
@@ -998,15 +998,14 @@ def _clean_commands(commands: list[Any]) -> list[str]:
             continue
         # Disallow UI-only / JS-API-only operations. Canvas hygiene and label visibility are handled
         # deterministically in the frontend tool runner.
+        # NOTE: SetColor, SetLineThickness, and SetLineStyle are allowed as a limited whitelist
+        # if explicitly requested by the user (as per system prompt).
         if normalized.startswith(
             (
                 "showlabel(",
                 "setlabelvisible(",
                 "label(",
                 "setcaption(",
-                "setcolor(",
-                "setlinethickness(",
-                "setlinestyle(",
                 "setvisibleinview(",
                 "showaxes(",
                 "showgrid(",
@@ -1060,7 +1059,7 @@ def generate_geogebra_commands(
             + f"tool_calls_used: {tool_calls_used}\n"
             + f"tool_calls_limit: {tool_calls_limit}\n"
             + f"remaining_tool_calls: {remaining}\n"
-            + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+                f"canvas_objects (latest, up to 30): {canvas_objects}\n"
             + f"canvas_object_type_counts: {_json_compact(object_type_counts, max_chars=600)}\n"
             + f"action_ledger: {_json_compact(action_ledger, max_chars=1400)}\n"
             + f"object_provenance (for canvas_objects): {_json_compact(object_provenance, max_chars=800)}\n"
@@ -1179,8 +1178,8 @@ def generate_final_answer(
             + (f"{memory_ctx}\n" if memory_ctx else "")
             + f"tool_calls_used: {tool_calls_used}\n"
             + f"tool_calls_limit: {tool_calls_limit}\n"
-            + f"executed_commands (latest, up to 12): {executed_commands}\n"
-            + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+            + f"executed_commands (latest, up to 30): {executed_commands}\n"
+                f"canvas_objects (latest, up to 30): {canvas_objects}\n"
             + f"canvas_object_type_counts: {_json_compact(object_type_counts, max_chars=600)}\n"
             + f"action_ledger: {_json_compact(action_ledger, max_chars=1400)}\n"
             + f"object_provenance (for canvas_objects): {_json_compact(object_provenance, max_chars=800)}\n"
@@ -1311,7 +1310,7 @@ def decide_next_step(
             + (f"{memory_ctx}\n" if memory_ctx else "")
             + f"tool_calls_used: {tool_calls_used}\n"
             + f"tool_calls_limit: {tool_calls_limit}\n"
-            + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+                f"canvas_objects (latest, up to 30): {canvas_objects}\n"
             + f"canvas_object_type_counts: {_json_compact(object_type_counts, max_chars=600)}\n"
             + f"action_ledger: {_json_compact(action_ledger, max_chars=1400)}\n"
             + f"object_provenance (for canvas_objects): {_json_compact(object_provenance, max_chars=800)}\n"
@@ -1458,7 +1457,7 @@ def generate_plan(
             + "- exec_geogebra_commands: create/modify objects on the canvas\n"
             + "- delete_objects: cleanup objects if needed\n"
             + "- eval_numeric / eval_expression: check numeric/algebraic properties\n"
-            + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+                f"canvas_objects (latest, up to 30): {canvas_objects}\n"
             + f"canvas_object_type_counts: {_json_compact(object_type_counts, max_chars=600)}\n"
             + f"action_ledger: {_json_compact(action_ledger, max_chars=1200)}\n"
             + (f"canvas_diff (prev turn -> now): {_json_compact(canvas_diff, max_chars=1200)}\n" if canvas_diff else "")

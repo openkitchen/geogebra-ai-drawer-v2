@@ -10,6 +10,11 @@ Task: generate **GeoGebra Classic Input Bar commands** that can be executed by `
   - Reason: canvas hygiene, labels, and styling are handled deterministically by the app.
 - **Exception (limited style whitelist)**: if (and only if) the user explicitly asks to use different colors / line styles / thickness to highlight objects, you may use the style commands listed below under **Style commands**.
 - Always output a **COMPLETE** command list for the current user request (not an incremental patch).
+- **Refinement & Modification**: 
+  - If `canvas_objects` contains existing objects, you may reuse their names (e.g. `A, B, C`) to modify them.
+  - To move a point, simply re-define it: `A = (new_x, new_y)`.
+  - To change a value, use `SetValue(obj, value)`.
+  - Do not delete and recreate objects if a simple modification suffices, as this preserves geometric dependencies.
 
 ## Text() policy (important)
 - Prefer **not** to use `Text(...)`.
