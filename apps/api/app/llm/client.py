@@ -9,7 +9,7 @@ from langchain_openai import ChatOpenAI
 from openai import OpenAI
 from pydantic import BaseModel
 
-from ..debug_trace import trace_exception, trace_line
+from ..debug_trace import trace_exception, trace_line, trace_reasoning_to_file
 from .config import load_llm_config
 from .errors import LlmInvocationError
 
@@ -301,6 +301,13 @@ class LlmClient:
                                         },
                                     )
 
+                            reasoning_meta = None
+                            if self._run_id:
+                                reasoning_meta = trace_reasoning_to_file(
+                                    run_id=self._run_id, op=op, role=role, text=reasoning_total
+                                )
+                            include_reasoning_preview = reasoning_meta is not None
+
                             trace_line(
                                 run_id=self._run_id,
                                 ui_debug=self._ui_debug,
@@ -309,7 +316,8 @@ class LlmClient:
                                     "chunks": chunk_count,
                                     "content_len": len(full_text),
                                     "reasoning_len": len(reasoning_total),
-                                    "reasoning_preview": reasoning_total[:400],
+                                    "reasoning_preview": (reasoning_total[:240] if include_reasoning_preview else None),
+                                    **(reasoning_meta or {}),
                                 },
                             )
 
@@ -325,14 +333,8 @@ class LlmClient:
                             )
 
                 full_text = ""
+                reasoning_total = ""
                 chunk_count = 0
-                token_mgr = None
-                if self._run_id and self._ui_debug:
-                    try:
-                        from .token_events import get_token_manager
-                        token_mgr = get_token_manager()
-                    except Exception:
-                        token_mgr = None
                 
                 # Debug: log stream start
                 if self._ui_debug and self._run_id:
@@ -368,18 +370,14 @@ class LlmClient:
                         )
 
                     # Some OpenAI-compatible gateways may attach reasoning deltas in additional_kwargs.
-                    # If present, stream them as a separate channel (dev-only UI can render it).
-                    if token_mgr is not None and isinstance(additional_kwargs, dict):
+                    if isinstance(additional_kwargs, dict):
                         reasoning_delta = (
                             additional_kwargs.get("reasoning") or
                             additional_kwargs.get("thinking") or
                             additional_kwargs.get("reasoning_content")
                         )
                         if isinstance(reasoning_delta, str) and reasoning_delta:
-                            try:
-                                token_mgr.send_token(self._run_id, reasoning_delta, channel="reasoning")
-                            except Exception:
-                                pass
+                            reasoning_total += reasoning_delta
                     
                     if isinstance(content, str) and content:
                         # Determine if content is cumulative or incremental
@@ -410,18 +408,6 @@ class LlmClient:
                             token_callback(delta)
                             full_text += delta
                 
-                # Debug: log stream end
-                if self._ui_debug and self._run_id:
-                    trace_line(
-                        run_id=self._run_id,
-                        ui_debug=self._ui_debug,
-                        kind="llm_stream_end",
-                        payload={
-                            "chunk_count": chunk_count,
-                            "final_text_len": len(full_text),
-                        },
-                    )
-                
                 # Extract thinking/reasoning content from the final message
                 # Note: streaming may not preserve metadata, so we try to get it from the last chunk
                 thinking_content = None
@@ -435,6 +421,25 @@ class LlmClient:
                     )
 
                 main_text = full_text.strip() if full_text.strip() else ""
+                reasoning_text = reasoning_total
+                if (not reasoning_text.strip()) and isinstance(thinking_content, str):
+                    reasoning_text = thinking_content
+                if self._run_id:
+                    reasoning_meta = trace_reasoning_to_file(run_id=self._run_id, op=op, role=role, text=reasoning_text)
+                    if self._ui_debug and self._run_id:
+                        trace_line(
+                            run_id=self._run_id,
+                            ui_debug=self._ui_debug,
+                            kind="llm_stream_end",
+                            payload={
+                                "op": op,
+                                "role": role,
+                                "chunk_count": chunk_count,
+                                "final_text_len": len(full_text),
+                                "reasoning_len": len(reasoning_text or ""),
+                                **(reasoning_meta or {}),
+                            },
+                        )
                 
                 # Combine thinking content with main content if available
                 if isinstance(thinking_content, str) and thinking_content.strip():
@@ -491,6 +496,9 @@ class LlmClient:
             # Get the main content
             content = getattr(msg, "content", None)
             main_text = content.strip() if isinstance(content, str) and content.strip() else ""
+
+            if self._run_id:
+                trace_reasoning_to_file(run_id=self._run_id, op=op, role=role, text=(thinking_content or ""))
             
             # Combine thinking content with main content if available
             if isinstance(thinking_content, str) and thinking_content.strip():
@@ -507,4 +515,3 @@ def raise_on_none(value: Any, *, message: str) -> Any:
     if value is None:
         raise LlmInvocationError(message)
     return value
-

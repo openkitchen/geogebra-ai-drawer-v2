@@ -107,5 +107,39 @@ else
     --require-phase Verify
 fi
 
+echo "== smoke: reasoning trace helper (no LLM) =="
+ROOT_DIR="$ROOT_DIR" python3 - <<'PY'
+import os
+import pathlib
+import tempfile
+import sys
+
+root_dir = pathlib.Path(os.environ["ROOT_DIR"]).resolve()
+api_dir = root_dir / "apps" / "api"
+sys.path.insert(0, str(api_dir))
+
+from app.debug_trace import trace_reasoning_to_file  # type: ignore
+
+with tempfile.TemporaryDirectory() as td:
+    os.environ["V2_TRACE_DIR"] = td
+
+    # Disabled by default
+    os.environ.pop("V2_TRACE_REASONING", None)
+    assert trace_reasoning_to_file(run_id="r0", op="op", role="role", text="abc") is None
+
+    # Enabled + truncation behavior
+    os.environ["V2_TRACE_REASONING"] = "1"
+    os.environ["V2_TRACE_REASONING_MAX_CHARS"] = "10000"
+    meta = trace_reasoning_to_file(run_id="r1", op="op", role="role", text=("a" * 10050))
+    assert isinstance(meta, dict) and meta.get("reasoning_file"), meta
+    p = pathlib.Path(str(meta["reasoning_file"]))
+    assert p.exists(), p
+    saved = p.read_text(encoding="utf-8")
+    assert len(saved) == 10000, len(saved)
+    assert meta.get("reasoning_truncated") is True, meta
+
+print("OK: reasoning trace helper smoke passed.")
+PY
+
 echo "OK: v2 acceptance (api) passed."
 echo "NOTE: This script validates ai-api only. Full acceptance still requires a browser run for ai-web (see docs/self-test.md)."

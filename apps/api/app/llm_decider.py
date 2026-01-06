@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError, model_validator
 
-from .debug_trace import trace_exception, trace_line
+from .debug_trace import trace_exception, trace_line, trace_reasoning_to_file
 from .protocol_v2 import (
     DeleteObjectsInput,
     ExecGeogebraCommandsInput,
@@ -264,17 +264,17 @@ def _invoke_openai_stream_text(
             )
             if isinstance(reasoning_delta, str) and reasoning_delta:
                 reasoning_total += reasoning_delta
-                if token_mgr is not None and run_id:
-                    try:
-                        token_mgr.send_token(run_id, reasoning_delta, channel="reasoning")
-                    except Exception:
-                        pass
     except Exception as e:
         if run_id:
             trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"openai_stream.iter[{op}][{role}]", exc=e)
         return None
     finally:
         took_ms = int((time.time() - t0) * 1000)
+        reasoning_meta = None
+        if run_id:
+            reasoning_meta = trace_reasoning_to_file(run_id=run_id, op=op, role=role, text=reasoning_total)
+        include_reasoning_preview = reasoning_meta is not None
+
         _trace_llm_event(
             run_id=run_id,
             ui_debug=ui_debug,
@@ -286,7 +286,9 @@ def _invoke_openai_stream_text(
                 "first_token_ms": first_token_ms,
                 "content_len": len(content_total),
                 "reasoning_len": len(reasoning_total),
-                "reasoning_preview": reasoning_total[:240],
+                # Optional: for local debugging only (must be explicitly enabled).
+                "reasoning_preview": (reasoning_total[:240] if include_reasoning_preview else None),
+                **(reasoning_meta or {}),
             },
         )
 

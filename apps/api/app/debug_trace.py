@@ -5,6 +5,8 @@ import logging
 import os
 import time
 import traceback
+import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +45,64 @@ def _trace_dir(ui_debug: bool) -> Path | None:
         return Path(raw_dir)
 
     return _repo_root() / "logs" / "v2"
+
+
+def _trace_reasoning_enabled() -> bool:
+    # Must be explicitly enabled. This may contain raw chain-of-thought from the provider.
+    return _parse_bool_env("V2_TRACE_REASONING", default=False)
+
+
+def _trace_reasoning_max_chars() -> int:
+    raw = (os.getenv("V2_TRACE_REASONING_MAX_CHARS") or "").strip()
+    if not raw:
+        return 200_000
+    try:
+        v = int(raw)
+    except Exception:
+        return 200_000
+    return max(10_000, min(v, 2_000_000))
+
+
+def trace_reasoning_to_file(*, run_id: str, op: str, role: str, text: str) -> dict[str, Any] | None:
+    """Persist continuous reasoning text to a sidecar file (dev-only).
+
+    Returns a small metadata dict suitable for JSONL traces, or None if not enabled.
+    """
+    if not _trace_reasoning_enabled():
+        return None
+    if not run_id:
+        return None
+    if not isinstance(text, str) or not text.strip():
+        return None
+
+    raw_text = text
+    max_chars = _trace_reasoning_max_chars()
+    truncated = False
+    if len(raw_text) > max_chars:
+        raw_text = raw_text[:max_chars]
+        truncated = True
+
+    raw_dir = (os.getenv("V2_TRACE_DIR") or "").strip()
+    dir_path = Path(raw_dir) if raw_dir else (_repo_root() / "logs" / "v2")
+
+    safe_op = re.sub(r"[^a-zA-Z0-9_\\-]+", "_", op or "").strip("_") or "op"
+    safe_role = re.sub(r"[^a-zA-Z0-9_\\-]+", "_", role or "").strip("_") or "role"
+    filename = f"run-{run_id}-{safe_op}-{safe_role}.reasoning.txt"
+    path = dir_path / filename
+
+    try:
+        dir_path.mkdir(parents=True, exist_ok=True)
+        path.write_text(raw_text, encoding="utf-8")
+        sha256 = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+        return {
+            "reasoning_file": str(path),
+            "reasoning_sha256": sha256,
+            "reasoning_truncated": truncated,
+            "reasoning_raw_len": len(text),
+            "reasoning_saved_len": len(raw_text),
+        }
+    except Exception:
+        return None
 
 
 def trace_line(*, run_id: str, ui_debug: bool, kind: str, payload: dict[str, Any]) -> None:
