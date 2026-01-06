@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from openai import OpenAI
 from pydantic import BaseModel, ValidationError, model_validator
 
 from .debug_trace import trace_exception, trace_line
@@ -116,6 +117,181 @@ def _build_runnable_config(*, run_id: str | None, op: str, role: str) -> dict[st
         "tags": ["geogebra-v2", op, f"role:{role}"],
         "metadata": {"run_id": run_id, "role": role},
     }
+
+
+def _lc_messages_to_openai(messages_in: list[Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for m in messages_in:
+        m_type = getattr(m, "type", None)  # e.g. "system" | "human" | "ai" | "tool"
+        content = getattr(m, "content", None)
+        if not isinstance(content, str):
+            content = str(content) if content is not None else ""
+
+        role_name = "user"
+        if m_type == "system":
+            role_name = "system"
+        elif m_type == "human":
+            role_name = "user"
+        elif m_type == "ai":
+            role_name = "assistant"
+        elif m_type == "tool":
+            role_name = "tool"
+
+        msg: dict[str, Any] = {"role": role_name, "content": content}
+        tool_call_id = getattr(m, "tool_call_id", None)
+        if role_name == "tool" and isinstance(tool_call_id, str) and tool_call_id:
+            msg["tool_call_id"] = tool_call_id
+        out.append(msg)
+    return out
+
+
+def _invoke_openai_stream_text(
+    *,
+    cfg: LlmConfig,
+    op: str,
+    role: str,
+    messages: list[Any],
+    run_id: str | None,
+    ui_debug: bool,
+    send_tokens: bool,
+) -> str | None:
+    """Stream a completion via OpenAI-compatible API, and wait until the stream ends.
+
+    IMPORTANT: do not stop early even if we already saw a JSON object. We must read until
+    the provider finishes output, otherwise some providers (e.g. Kimi) may behave poorly.
+    """
+
+    if send_tokens and run_id:
+        try:
+            from .llm.token_events import get_token_manager
+
+            token_mgr = get_token_manager()
+        except Exception:
+            token_mgr = None
+    else:
+        token_mgr = None
+
+    try:
+        client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url, timeout=cfg.timeout_s)
+    except TypeError:
+        # Backward-compat for older SDK signatures.
+        client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+
+    openai_messages = _lc_messages_to_openai(messages)
+
+    t0 = time.time()
+    first_token_ms: int | None = None
+    content_total = ""
+    reasoning_total = ""
+    chunk_count = 0
+
+    _trace_llm_event(
+        run_id=run_id,
+        ui_debug=ui_debug,
+        name=f"{op}.stream_start",
+        data={
+            "role": role,
+            "model": cfg.model,
+            "base_url": cfg.base_url,
+            "timeout_s": cfg.timeout_s,
+            "messages": [{"role": m.get("role"), "content_len": len(str(m.get("content") or ""))} for m in openai_messages],
+        },
+    )
+
+    def _create_stream(*, with_usage: bool) -> Any:
+        kwargs: dict[str, Any] = {
+            "model": cfg.model,
+            "messages": openai_messages,
+            "temperature": cfg.temperature,
+            "stream": True,
+        }
+        if with_usage:
+            kwargs["stream_options"] = {"include_usage": True}
+        return client.chat.completions.create(**kwargs)
+
+    try:
+        stream_resp = _create_stream(with_usage=True)
+    except Exception as e:
+        # Some gateways don't support stream_options; keep streaming but drop usage.
+        if run_id:
+            trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"openai_stream.create[{op}][{role}]", exc=e)
+        try:
+            stream_resp = _create_stream(with_usage=False)
+        except Exception as e2:
+            if run_id:
+                trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"openai_stream.create_fallback[{op}][{role}]", exc=e2)
+            return None
+
+    try:
+        for chunk in stream_resp:
+            chunk_count += 1
+            try:
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                delta_obj = getattr(choices[0], "delta", None)
+            except Exception:
+                continue
+
+            delta_dict: dict[str, Any] = {}
+            try:
+                if delta_obj is not None:
+                    delta_dict = delta_obj.model_dump(exclude_none=True)  # type: ignore[attr-defined]
+            except Exception:
+                delta_dict = {}
+
+            content_delta = delta_dict.get("content")
+            if isinstance(content_delta, str) and content_delta:
+                if first_token_ms is None:
+                    first_token_ms = int((time.time() - t0) * 1000)
+                    _trace_llm_event(
+                        run_id=run_id,
+                        ui_debug=ui_debug,
+                        name=f"{op}.first_token",
+                        data={"role": role, "first_token_ms": first_token_ms, "chunks_before_first_token": chunk_count},
+                    )
+                if token_mgr is not None and run_id:
+                    try:
+                        token_mgr.send_token(run_id, content_delta, channel="content")
+                    except Exception:
+                        pass
+                content_total += content_delta
+
+            reasoning_delta = (
+                delta_dict.get("reasoning_content")
+                or delta_dict.get("reasoning")
+                or delta_dict.get("thinking")
+            )
+            if isinstance(reasoning_delta, str) and reasoning_delta:
+                reasoning_total += reasoning_delta
+                if token_mgr is not None and run_id:
+                    try:
+                        token_mgr.send_token(run_id, reasoning_delta, channel="reasoning")
+                    except Exception:
+                        pass
+    except Exception as e:
+        if run_id:
+            trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"openai_stream.iter[{op}][{role}]", exc=e)
+        return None
+    finally:
+        took_ms = int((time.time() - t0) * 1000)
+        _trace_llm_event(
+            run_id=run_id,
+            ui_debug=ui_debug,
+            name=f"{op}.stream_end",
+            data={
+                "role": role,
+                "took_ms": took_ms,
+                "chunks": chunk_count,
+                "first_token_ms": first_token_ms,
+                "content_len": len(content_total),
+                "reasoning_len": len(reasoning_total),
+                "reasoning_preview": reasoning_total[:240],
+            },
+        )
+
+    text = (content_total or "").strip()
+    return text if text else None
 
 
 def _strip_wrapping_quotes(raw: str) -> str:
@@ -897,14 +1073,6 @@ def generate_geogebra_commands(
         if cfg is None:
             continue
 
-        llm = _build_llm(
-            api_key=cfg.api_key,
-            base_url=cfg.base_url,
-            model=cfg.model,
-            temperature=cfg.temperature,
-            timeout_s=cfg.timeout_s,
-        )
-
         _trace_llm_event(
             run_id=run_id,
             ui_debug=ui_debug,
@@ -922,42 +1090,11 @@ def generate_geogebra_commands(
         )
 
         t0 = time.time()
-        structured = llm.with_structured_output(ExecGeogebraCommandsInput)
 
-        def invoke_structured(messages: list[Any]) -> ExecGeogebraCommandsInput | None:
-            try:
-                result = structured.invoke(
-                    messages, config=_build_runnable_config(run_id=run_id, op="command_gen", role=role)
-                )
-            except Exception as e:
-                if run_id:
-                    trace_exception(
-                        run_id=run_id,
-                        ui_debug=ui_debug,
-                        where=f"generate_geogebra_commands.structured_invoke[{role}]",
-                        exc=e,
-                    )
-                return None
-            if isinstance(result, ExecGeogebraCommandsInput):
-                return result
-            return None
-
-        def invoke_json_fallback() -> list[str] | None:
-            try:
-                msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="command_gen", role=role))
-            except Exception as e:
-                if run_id:
-                    trace_exception(
-                        run_id=run_id,
-                        ui_debug=ui_debug,
-                        where=f"generate_geogebra_commands.json_invoke[{role}]",
-                        exc=e,
-                    )
-                return None
-            content = getattr(msg, "content", None)
-            if not isinstance(content, str):
-                return None
-            blob = _extract_json_object(content)
+        def parse_commands(raw_text: str) -> list[str] | None:
+            # Some providers wrap JSON in a fenced block; unwrap first.
+            body, _unwrap = _unwrap_single_fenced_block(raw_text)
+            blob = _extract_json_object(body)
             if not blob:
                 return None
             try:
@@ -966,31 +1103,24 @@ def generate_geogebra_commands(
                 return None
             if not isinstance(payload, dict):
                 return None
-            commands = payload.get("commands")
-            if not isinstance(commands, list):
+            try:
+                parsed = ExecGeogebraCommandsInput.model_validate(payload)
+            except ValidationError:
                 return None
-            return _clean_commands(commands)
+            return _clean_commands(list(parsed.commands))
 
-        result = invoke_structured([system, human])
-        if result is not None:
-            commands = _clean_commands(result.commands)
-            took_ms = int((time.time() - t0) * 1000)
-            _trace_llm_event(
-                run_id=run_id,
-                ui_debug=ui_debug,
-                name="command_gen.ok",
-                data={
-                    "requested_role": requested_role,
-                    "role": role,
-                    "mode": "structured_output",
-                    "took_ms": took_ms,
-                    "commands_count": len(commands),
-                    "commands_preview": commands[:8],
-                },
-            )
-            return commands if commands else None
+        # Use OpenAI-compatible streaming and wait until completion.
+        raw = _invoke_openai_stream_text(
+            cfg=cfg,
+            op="command_gen",
+            role=role,
+            messages=[system, human],
+            run_id=run_id,
+            ui_debug=ui_debug,
+            send_tokens=bool(ui_debug),
+        )
 
-        fallback = invoke_json_fallback()
+        commands = parse_commands(raw) if isinstance(raw, str) else None
         took_ms = int((time.time() - t0) * 1000)
         _trace_llm_event(
             run_id=run_id,
@@ -999,15 +1129,14 @@ def generate_geogebra_commands(
             data={
                 "requested_role": requested_role,
                 "role": role,
-                "mode": "json_fallback" if fallback else "none",
+                "mode": "openai_stream" if commands else "none",
                 "took_ms": took_ms,
-                "commands_count": len(fallback) if fallback else 0,
-                "commands_preview": (fallback or [])[:8],
+                "commands_count": len(commands) if commands else 0,
+                "commands_preview": (commands or [])[:8],
             },
         )
-
-        if fallback:
-            return fallback
+        if commands:
+            return commands
 
     _trace_llm_event(
         run_id=run_id,
@@ -1063,14 +1192,6 @@ def generate_final_answer(
         if cfg is None:
             continue
 
-        llm = _build_llm(
-            api_key=cfg.api_key,
-            base_url=cfg.base_url,
-            model=cfg.model,
-            temperature=cfg.temperature,
-            timeout_s=cfg.timeout_s,
-        )
-
         _trace_llm_event(
             run_id=run_id,
             ui_debug=ui_debug,
@@ -1088,15 +1209,17 @@ def generate_final_answer(
         )
 
         t0 = time.time()
-        try:
-            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="final", role=role))
-        except Exception as e:
-            if run_id:
-                trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"generate_final_answer.invoke[{role}]", exc=e)
-            continue
 
-        content = getattr(msg, "content", None)
-        if not isinstance(content, str):
+        text = _invoke_openai_stream_text(
+            cfg=cfg,
+            op="final",
+            role=role,
+            messages=[system, human],
+            run_id=run_id,
+            ui_debug=ui_debug,
+            send_tokens=bool(ui_debug),
+        )
+        if not isinstance(text, str) or not text.strip():
             took_ms = int((time.time() - t0) * 1000)
             _trace_llm_event(
                 run_id=run_id,
@@ -1105,28 +1228,12 @@ def generate_final_answer(
                 data={
                     "role": role,
                     "took_ms": took_ms,
-                    "reason": "non_string_content",
-                    "content_type": type(content).__name__,
-                    "usage": _extract_usage_metadata(msg),
+                    "reason": "empty_or_error",
                 },
             )
             continue
 
-        text = content.strip()
-        if not text:
-            took_ms = int((time.time() - t0) * 1000)
-            _trace_llm_event(
-                run_id=run_id,
-                ui_debug=ui_debug,
-                name="final.bad_response",
-                data={
-                    "role": role,
-                    "took_ms": took_ms,
-                    "reason": "empty_text",
-                    "usage": _extract_usage_metadata(msg),
-                },
-            )
-            continue
+        text = text.strip()
 
         # If the model wraps the whole reply in ```plaintext``` (or similar), unwrap it so the UI
         # doesn't show the fences literally.
@@ -1144,7 +1251,6 @@ def generate_final_answer(
                 "text_preview": _preview_text(text, limit=320),
                 "raw_text_preview": _preview_text(raw_text, limit=320) if unwrap_info else None,
                 "unwrap": unwrap_info,
-                "usage": _extract_usage_metadata(msg),
             },
         )
         return text
@@ -1331,14 +1437,6 @@ def generate_plan(
     if cfg is None:
         return None
 
-    llm = _build_llm(
-        api_key=cfg.api_key,
-        base_url=cfg.base_url,
-        model=cfg.model,
-        temperature=cfg.temperature,
-        timeout_s=cfg.timeout_s,
-    )
-
     canvas_objects = _compact_canvas_objects(tool_results)
     raw_objects = _extract_latest_canvas_objects_raw(tool_results)
     object_type_counts = _count_canvas_object_types(raw_objects)
@@ -1363,48 +1461,33 @@ def generate_plan(
         )
     )
 
-    structured = llm.with_structured_output(PlanSteps)
-
-    def invoke_structured() -> PlanSteps | None:
-        try:
-            result = structured.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="plan", role="main"))
-        except Exception as e:
-            if run_id:
-                trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_plan.structured_invoke", exc=e)
-            return None
-        if isinstance(result, PlanSteps):
-            return result
+    raw = _invoke_openai_stream_text(
+        cfg=cfg,
+        op="plan",
+        role="main",
+        messages=[system, human],
+        run_id=run_id,
+        ui_debug=ui_debug,
+        send_tokens=bool(ui_debug),
+    )
+    if not isinstance(raw, str) or not raw.strip():
         return None
 
-    def invoke_json_fallback() -> list[str] | None:
-        try:
-            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="plan", role="main"))
-        except Exception as e:
-            if run_id:
-                trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_plan.json_invoke", exc=e)
-            return None
-        content = getattr(msg, "content", None)
-        if not isinstance(content, str):
-            return None
-        blob = _extract_json_object(content)
-        if not blob:
-            return None
-        try:
-            payload = json.loads(blob)
-        except Exception:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        steps = payload.get("steps")
-        if not isinstance(steps, list):
-            return None
-        clean = [s.strip() for s in steps if isinstance(s, str) and s.strip()]
-        return clean[:8] if clean else None
-
-    out = invoke_structured()
-    if out is not None:
-        return out.steps
-    return invoke_json_fallback()
+    body, _unwrap = _unwrap_single_fenced_block(raw)
+    blob = _extract_json_object(body)
+    if not blob:
+        return None
+    try:
+        payload = json.loads(blob)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        parsed = PlanSteps.model_validate(payload)
+    except ValidationError:
+        return None
+    return parsed.steps
 
 
 class MemorySummary(BaseModel):
@@ -1430,8 +1513,7 @@ def summarize_memory(
     cfg = load_llm_config(role=role)
     if cfg is None:
         return None
-
-    llm = _build_llm(
+    cfg2 = LlmConfig(
         api_key=cfg.api_key,
         base_url=cfg.base_url,
         model=cfg.model,
@@ -1465,48 +1547,30 @@ def summarize_memory(
         chunks.append(f"{role2}: {t}")
     human = HumanMessage(content="\n".join(chunks).strip())
 
-    structured = llm.with_structured_output(MemorySummary)
-
-    def invoke_structured() -> MemorySummary | None:
-        try:
-            result = structured.invoke(
-                [system, human],
-                config=_build_runnable_config(run_id=run_id, op="memory_summary", role=role),
-            )
-        except Exception as e:
-            if run_id:
-                trace_exception(run_id=run_id, ui_debug=ui_debug, where="summarize_memory.structured_invoke", exc=e)
-            return None
-        if isinstance(result, MemorySummary):
-            return result
+    raw = _invoke_openai_stream_text(
+        cfg=cfg2,
+        op="memory_summary",
+        role=role,
+        messages=[system, human],
+        run_id=run_id,
+        ui_debug=ui_debug,
+        send_tokens=False,  # never stream summary tokens to SSE/UI
+    )
+    if not isinstance(raw, str) or not raw.strip():
         return None
 
-    def invoke_json_fallback() -> str | None:
-        try:
-            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="memory_summary", role=role))
-        except Exception as e:
-            if run_id:
-                trace_exception(run_id=run_id, ui_debug=ui_debug, where="summarize_memory.json_invoke", exc=e)
-            return None
-        content = getattr(msg, "content", None)
-        if not isinstance(content, str):
-            return None
-        blob = _extract_json_object(content) or ""
-        if not blob:
-            return None
-        try:
-            payload = json.loads(blob)
-        except Exception:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        summary = payload.get("summary")
-        if not isinstance(summary, str):
-            return None
-        s2 = summary.strip()
-        return s2[:4000] if s2 else None
-
-    out = invoke_structured()
-    if out is not None:
-        return out.summary
-    return invoke_json_fallback()
+    body, _unwrap = _unwrap_single_fenced_block(raw)
+    blob = _extract_json_object(body) or ""
+    if not blob:
+        return None
+    try:
+        payload = json.loads(blob)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        parsed = MemorySummary.model_validate(payload)
+    except ValidationError:
+        return None
+    return parsed.summary
