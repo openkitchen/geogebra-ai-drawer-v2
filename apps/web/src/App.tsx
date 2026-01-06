@@ -29,6 +29,18 @@ export default function App() {
   const [devMode, setDevMode] = useState(false);
   const [debugDrawerOpen, setDebugDrawerOpen] = useState(false);
 
+  const forceHardMode = (() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const raw = params.get('forceHardMode') ?? params.get('force_hard_mode') ?? params.get('force_hard');
+      if (!raw) return false;
+      const v = raw.trim().toLowerCase();
+      return v === '1' || v === 'true' || v === 'yes' || v === 'y' || v === 'on';
+    } catch {
+      return false;
+    }
+  })();
+
   // Auto-scroll
   const lastAssistantStatus = (() => {
     const last = messages.length ? messages[messages.length - 1] : null;
@@ -211,7 +223,21 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             input: { user_text: userText },
-            ui_context: { locale: 'zh-CN', debug: devMode, plan_mode: devMode, intent_hint: intentHint ?? null }, // Plan is for developer timeline
+            ui_context: {
+              locale: 'zh-CN',
+              debug: devMode,
+              plan_mode: devMode, // Plan is for developer timeline
+              intent_hint: (() => {
+                const hinted = intentHint ?? null;
+                if (!forceHardMode) return hinted;
+                const obj: Record<string, unknown> = hinted && typeof hinted === 'object' ? { ...(hinted as any) } : {};
+                if (obj.difficulty == null) obj.difficulty = 'hard';
+                // NOTE: any intent_hint bypasses strict intent classification on the server,
+                // so we must also set wants_draw to keep draw flows working in dev/acceptance.
+                if (obj.wants_draw == null) obj.wants_draw = true;
+                return obj;
+              })(),
+            },
           }),
         });
 

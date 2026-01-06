@@ -540,6 +540,10 @@ def run_smoke(
     force_repair_once: bool,
     fail_on_exception: bool,
     required_tools: set[str] | None = None,
+    intent_hint: dict[str, Any] | None = None,
+    require_difficulty_update: bool = False,
+    require_difficulty: str | None = None,
+    require_phases: set[str] | None = None,
 ) -> int:
     if thread_id is None:
         thread = _http_json(method="POST", url=f"{base_url}/api/threads", timeout_s=timeout_s)
@@ -561,7 +565,14 @@ def run_smoke(
     required = {t.strip() for t in (required_tools or set()) if t and t.strip()}
     seen_tools: set[str] = set()
 
-    body = {"input": {"user_text": user_text}, "ui_context": {"debug": True, "plan_mode": True}}
+    body: dict[str, Any] = {"input": {"user_text": user_text}, "ui_context": {"debug": True, "plan_mode": True}}
+    if isinstance(intent_hint, dict) and intent_hint:
+        body["ui_context"]["intent_hint"] = intent_hint
+
+    difficulty_seen = False
+    difficulty_value: str | None = None
+    phase_names: set[str] = set()
+
     for ev in _http_sse(
         method="POST",
         url=f"{base_url}/api/threads/{thread_id}/runs/stream",
@@ -572,6 +583,13 @@ def run_smoke(
         if ev.event == "run_start" and isinstance(ev.data, dict):
             run_id = str(ev.data.get("run_id") or "")
             saw_protocol_version = bool(ev.data.get("protocol_version"))
+        if ev.event == "difficulty_update" and isinstance(ev.data, dict):
+            difficulty_seen = True
+            difficulty_value = str(ev.data.get("difficulty") or "") or None
+        if ev.event == "phase_update" and isinstance(ev.data, dict):
+            ph = ev.data.get("phase")
+            if isinstance(ph, str) and ph.strip():
+                phase_names.add(ph.strip())
         if ev.event == "budget":
             saw_budget = True
         if ev.event == "interrupt" and isinstance(ev.data, dict):
@@ -592,6 +610,22 @@ def run_smoke(
     if not saw_budget:
         print("ERR: did not receive budget event", file=sys.stderr)
         return 2
+
+    if require_difficulty_update and not difficulty_seen:
+        print("ERR: required difficulty_update not seen", file=sys.stderr)
+        return 2
+    if require_difficulty is not None:
+        want = str(require_difficulty).strip().lower()
+        if want not in {"simple", "hard"}:
+            print(f"ERR: invalid --require-difficulty={require_difficulty!r}", file=sys.stderr)
+            return 2
+        if not difficulty_seen:
+            print("ERR: required difficulty_update not seen", file=sys.stderr)
+            return 2
+        got = (difficulty_value or "").strip().lower()
+        if got != want:
+            print(f"ERR: difficulty mismatch want={want} got={got}", file=sys.stderr)
+            return 2
 
     if interrupt is None:
         if required:
@@ -650,6 +684,13 @@ def run_smoke(
                 saw_tool_end = True
             if ev.event == "budget":
                 saw_budget = True
+            if ev.event == "difficulty_update" and isinstance(ev.data, dict):
+                difficulty_seen = True
+                difficulty_value = str(ev.data.get("difficulty") or "") or None
+            if ev.event == "phase_update" and isinstance(ev.data, dict):
+                ph = ev.data.get("phase")
+                if isinstance(ph, str) and ph.strip():
+                    phase_names.add(ph.strip())
             if ev.event == "interrupt" and isinstance(ev.data, dict):
                 interrupt = ev.data
                 break
@@ -668,6 +709,30 @@ def run_smoke(
                 if missing:
                     print(f"ERR: required tool(s) not seen: {missing}", file=sys.stderr)
                     return 2
+
+            if require_difficulty_update and not difficulty_seen:
+                print("ERR: required difficulty_update not seen", file=sys.stderr)
+                return 2
+            if require_difficulty is not None:
+                want = str(require_difficulty).strip().lower()
+                if want not in {"simple", "hard"}:
+                    print(f"ERR: invalid --require-difficulty={require_difficulty!r}", file=sys.stderr)
+                    return 2
+                if not difficulty_seen:
+                    print("ERR: required difficulty_update not seen", file=sys.stderr)
+                    return 2
+                got = (difficulty_value or "").strip().lower()
+                if got != want:
+                    print(f"ERR: difficulty mismatch want={want} got={got}", file=sys.stderr)
+                    return 2
+            required_phase_set = {p.strip() for p in (require_phases or set()) if p and p.strip()}
+            if required_phase_set:
+                missing_phases = sorted(required_phase_set - phase_names)
+                if missing_phases:
+                    print(f"ERR: required phase(s) not seen: {missing_phases}", file=sys.stderr)
+                    print(f"     seen phases: {sorted(phase_names)}", file=sys.stderr)
+                    return 2
+
             print(f"OK: completed after {step} resume(s). run_id={run_id}")
             if _print_run_exception_summary(run_id=run_id, fail_on_exception=fail_on_exception):
                 return 2
@@ -695,6 +760,26 @@ def main(argv: list[str]) -> int:
         action="append",
         help="Require at least one interrupt for this tool name (repeatable).",
     )
+    parser.add_argument(
+        "--require-difficulty-update",
+        action="store_true",
+        help="Require that the run emits a difficulty_update event.",
+    )
+    parser.add_argument(
+        "--require-difficulty",
+        choices=["simple", "hard"],
+        help="Require difficulty_update.difficulty to match the given value.",
+    )
+    parser.add_argument(
+        "--require-phase",
+        action="append",
+        help="Require at least one phase_update with this phase name (repeatable).",
+    )
+    parser.add_argument(
+        "--force-hard-mode",
+        action="store_true",
+        help="Send ui_context.intent_hint={difficulty:'hard'} for stable hard-mode acceptance.",
+    )
     parser.add_argument("--force-repair-once", action="store_true", help="Force one verify failure to exercise repair loop")
     args = parser.parse_args(argv)
 
@@ -705,6 +790,12 @@ def main(argv: list[str]) -> int:
             turns = [args.user_text]
 
         required_tools = {str(t).strip() for t in (args.require_tool or []) if isinstance(t, str) and t.strip()}
+        require_phases = {str(p).strip() for p in (args.require_phase or []) if isinstance(p, str) and p.strip()}
+        intent_hint: dict[str, Any] | None = None
+        if bool(args.force_hard_mode):
+            # IMPORTANT: providing any intent_hint bypasses intent classification (strict rule),
+            # so we must include wants_draw to keep the draw path exercised in acceptance.
+            intent_hint = {"difficulty": "hard", "wants_draw": True}
 
         shared_canvas = FakeCanvas()
         thread_id = str(args.thread_id) if args.thread_id else None
@@ -728,6 +819,10 @@ def main(argv: list[str]) -> int:
                 force_repair_once=bool(args.force_repair_once) and i == 1,
                 fail_on_exception=bool(args.fail_on_exception),
                 required_tools=required_tools,
+                intent_hint=intent_hint,
+                require_difficulty_update=bool(args.require_difficulty_update),
+                require_difficulty=args.require_difficulty,
+                require_phases=require_phases,
             )
             if code != 0:
                 return code

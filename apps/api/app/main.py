@@ -43,6 +43,8 @@ class RunState:
     model_calls_used: int = 0
     model_calls_limit: int = 6
     completed_tool_call_ids: set[str] = field(default_factory=set)
+    # Dedup for safe phase updates across run_stream + multiple resume calls.
+    last_phase_seq_sent: int = 0
 
 
 class RunInput(BaseModel):
@@ -286,7 +288,6 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
                 interrupts_seen = False
                 plan_sent = False
                 difficulty_sent = False
-                last_phase_seq_sent = 0
                 for chunk in graph.stream(input_state, config):
                     interrupts = chunk.get("__interrupt__")
                     if interrupts and not interrupts_seen:
@@ -324,9 +325,9 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
                         # Emit safe, structured phase updates for hard-mode (UI-visible; not CoT).
                         seq = node_out.get("phase_seq")
                         phase_update = node_out.get("phase_update")
-                        if isinstance(seq, int) and seq > last_phase_seq_sent and isinstance(phase_update, dict) and phase_update:
+                        if isinstance(seq, int) and seq > run.last_phase_seq_sent and isinstance(phase_update, dict) and phase_update:
                             _emit("phase_update", phase_update)
-                            last_phase_seq_sent = seq
+                            run.last_phase_seq_sent = seq
 
                         if "model_calls_used" in node_out:
                             try:
@@ -557,6 +558,14 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
                         node_out = chunk.get(node_name)
                         if not isinstance(node_out, dict):
                             continue
+
+                        # Emit safe, structured phase updates for hard-mode (UI-visible; not CoT).
+                        seq = node_out.get("phase_seq")
+                        phase_update = node_out.get("phase_update")
+                        if isinstance(seq, int) and seq > run.last_phase_seq_sent and isinstance(phase_update, dict) and phase_update:
+                            _emit("phase_update", phase_update)
+                            run.last_phase_seq_sent = seq
+
                         if "model_calls_used" in node_out:
                             try:
                                 run.model_calls_used = int(node_out["model_calls_used"])

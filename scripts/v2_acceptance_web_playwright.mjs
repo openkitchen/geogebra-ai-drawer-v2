@@ -193,7 +193,8 @@ async function run() {
     page.setDefaultTimeout(timeoutMs);
     page.setDefaultNavigationTimeout(timeoutMs);
 
-    await page.goto(webBaseUrl, { waitUntil: 'domcontentloaded' });
+    // Force hard-mode hint from UI so we can assert hard-mode progress panel rendering deterministically.
+    await page.goto(`${webBaseUrl}/?forceHardMode=1`, { waitUntil: 'domcontentloaded' });
 
     // Wait for the GeoGebra applet to be ready.
     await page.getByTestId('ggb-status-pill').waitFor({ state: 'visible' });
@@ -236,6 +237,8 @@ async function run() {
     await assistantBubbles.first().waitFor({ state: 'visible' });
 
     const lastAssistant = assistantBubbles.last();
+    // Hard-mode panel should be present (we forced it via query param).
+    await lastAssistant.locator('text=思考进度（难题模式）').first().waitFor({ timeout: timeoutMs });
     await lastAssistant.getByTestId('trace-summary').click();
     const traceLog = lastAssistant.getByTestId('trace-log');
     await traceLog.waitFor({ state: 'visible' });

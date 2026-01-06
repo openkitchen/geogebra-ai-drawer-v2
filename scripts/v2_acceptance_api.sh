@@ -81,5 +81,29 @@ else
     --force-repair-once
 fi
 
+echo "== smoke: hard-mode signals (difficulty_update + phase_update) =="
+if [[ "$FAIL_ON_EXCEPTION" != "0" && "$FAIL_ON_EXCEPTION" != "false" ]]; then
+  python3 "$ROOT_DIR/scripts/v2_smoke_test.py" \
+    --base-url "$BASE_URL" \
+    --user-text "画一个圆" \
+    --force-hard-mode \
+    --require-tool exec_geogebra_commands \
+    --require-difficulty hard \
+    --require-phase Plan \
+    --require-phase Understand \
+    --require-phase Verify \
+    --fail-on-exception
+else
+  python3 "$ROOT_DIR/scripts/v2_smoke_test.py" \
+    --base-url "$BASE_URL" \
+    --user-text "画一个圆" \
+    --force-hard-mode \
+    --require-tool exec_geogebra_commands \
+    --require-difficulty hard \
+    --require-phase Plan \
+    --require-phase Understand \
+    --require-phase Verify
+fi
+
 echo "OK: v2 acceptance (api) passed."
 echo "NOTE: This script validates ai-api only. Full acceptance still requires a browser run for ai-web (see docs/self-test.md)."
