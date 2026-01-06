@@ -43,6 +43,8 @@ class RunState:
     model_calls_used: int = 0
     model_calls_limit: int = 6
     completed_tool_call_ids: set[str] = field(default_factory=set)
+    # Dedup: plan is emitted at most once per run (may occur on /resume).
+    plan_sent: bool = False
     # Dedup for safe phase updates across run_stream + multiple resume calls.
     last_phase_seq_sent: int = 0
 
@@ -286,7 +288,7 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
             answer_text: Optional[str] = None
             try:
                 interrupts_seen = False
-                plan_sent = False
+                plan_sent = bool(run.plan_sent)
                 difficulty_sent = False
                 for chunk in graph.stream(input_state, config):
                     interrupts = chunk.get("__interrupt__")
@@ -321,6 +323,7 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
                             if isinstance(plan, list) and plan:
                                 _emit("plan_update", {"plan": plan})
                                 plan_sent = True
+                                run.plan_sent = True
 
                         # Emit safe, structured phase updates for hard-mode (UI-visible; not CoT).
                         seq = node_out.get("phase_seq")
@@ -545,6 +548,7 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
             answer_text: Optional[str] = None
             try:
                 interrupts_seen = False
+                plan_sent = bool(run.plan_sent)
                 for chunk in graph.stream(Command(resume=resume.model_dump()), config):
                     interrupts = chunk.get("__interrupt__")
                     if interrupts and not interrupts_seen:
@@ -554,10 +558,17 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
                     if interrupts_seen:
                         continue
 
-                    for node_name in ("act_node", "finalize_node"):
+                    for node_name in ("plan_node", "act_node", "finalize_node"):
                         node_out = chunk.get(node_name)
                         if not isinstance(node_out, dict):
                             continue
+
+                        if node_name == "plan_node" and not plan_sent:
+                            plan = node_out.get("plan")
+                            if isinstance(plan, list) and plan:
+                                _emit("plan_update", {"plan": plan})
+                                plan_sent = True
+                                run.plan_sent = True
 
                         # Emit safe, structured phase updates for hard-mode (UI-visible; not CoT).
                         seq = node_out.get("phase_seq")

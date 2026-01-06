@@ -10,6 +10,7 @@ class GraphState(TypedDict, total=False):
     ui_debug: bool
     plan_mode: bool
     plan: list[dict[str, Any]]
+    plan_generated: bool
     user_text: str
     # Optional structured hint from UI (NOT derived from text parsing).
     intent_hint: dict[str, Any]
@@ -46,10 +47,9 @@ class GraphState(TypedDict, total=False):
     pending_numeric_eval: dict[str, Any]
     measured_triangle_kinds: dict[str, str]
     numeric_verified: bool
-    next_step_kind: Literal["tool", "final"]
+    next_step_kind: Literal["tool", "plan", "final"]
     next_tool_name: str
     next_tool_call_id: str
     next_tool_input: Any
     tool_results: list[dict[str, Any]]
     answer_text: str
-

@@ -34,6 +34,10 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
     if (difficulty !== 'hard') return null;
 
     const reasons = difficultyEv?.data?.reasons ?? [];
+    const planEv = events.find(
+      (e): e is Extract<RunStreamEvent, { event: 'plan_update' }> => e.event === 'plan_update',
+    );
+    const plan = Array.isArray(planEv?.data?.plan) ? planEv?.data?.plan : [];
     const phases = events.filter(
       (e): e is Extract<RunStreamEvent, { event: 'phase_update' }> => e.event === 'phase_update',
     );
@@ -41,6 +45,7 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
 
     return {
       reasons,
+      plan: plan.map((p: any) => String(p?.text ?? '')).filter((t: string) => t.trim()).slice(0, 8),
       phases: phases.map((e) => e.data).slice(-12),
       last,
     };
@@ -90,6 +95,13 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
                 <div>
                   <strong>判定原因：</strong>
                   {hardModePanel.reasons.join('、')}
+                </div>
+              ) : null}
+
+              {hardModePanel.plan.length ? (
+                <div>
+                  <strong>计划：</strong>
+                  {hardModePanel.plan.join(' → ')}
                 </div>
               ) : null}
 
@@ -207,6 +219,15 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
                           );
                         }
 
+                        if (ev.event === 'node_start' || ev.event === 'node_end') {
+                          return (
+                            <div key={idx} style={{ fontFamily: 'monospace', color: '#334155' }}>
+                              <span style={{ color: '#94a3b8', marginRight: 6 }}>[{ev.event}]</span>
+                              <span style={{ color: '#0f172a', fontWeight: 500 }}>name={(ev.data as any)?.name ?? '?'}</span>
+                            </div>
+                          );
+                        }
+
                         if (ev.event === 'difficulty_update') {
                           return (
                             <div key={idx} style={{ fontFamily: 'monospace', color: '#334155' }}>
@@ -221,6 +242,21 @@ export function ChatBubble({ message, devMode }: ChatBubbleProps) {
                                   reasons={ev.data.reasons.join('、')}
                                 </span>
                               ) : null}
+                            </div>
+                          );
+                        }
+
+                        if (ev.event === 'plan_update') {
+                          const plan = Array.isArray((ev.data as any)?.plan) ? (ev.data as any).plan : [];
+                          const texts = plan.map((p: any) => String(p?.text ?? '')).filter((t: string) => t.trim());
+                          const preview = texts.slice(0, 6).join(' → ');
+                          return (
+                            <div key={idx} style={{ fontFamily: 'monospace', color: '#334155' }}>
+                              <span style={{ color: '#94a3b8', marginRight: 6 }}>[plan_update]</span>
+                              <span style={{ color: '#0f172a', fontWeight: 500 }}>
+                                steps={texts.length}
+                              </span>
+                              {preview ? <span style={{ color: '#64748b', marginLeft: 6 }}>· {preview}</span> : null}
                             </div>
                           );
                         }

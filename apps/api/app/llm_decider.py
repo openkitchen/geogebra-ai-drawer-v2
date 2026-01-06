@@ -1321,10 +1321,13 @@ def generate_plan(
     user_text: str,
     memory_summary: str | None,
     recent_messages: list[dict[str, Any]] | None,
+    tool_results: list[dict[str, Any]] | None,
     run_id: str | None = None,
     ui_debug: bool = False,
 ) -> list[str] | None:
-    cfg = load_llm_config(role=os.getenv("V2_LLM_PLAN_ROLE") or "main")
+    # Planning MUST use the main/advanced role.
+    # Do not allow routing to a smaller/cheaper role via env vars.
+    cfg = load_llm_config(role="main")
     if cfg is None:
         return None
 
@@ -1336,16 +1339,35 @@ def generate_plan(
         timeout_s=cfg.timeout_s,
     )
 
+    canvas_objects = _compact_canvas_objects(tool_results)
+    raw_objects = _extract_latest_canvas_objects_raw(tool_results)
+    object_type_counts = _count_canvas_object_types(raw_objects)
+    action_ledger = _compact_action_ledger(tool_results)
+    canvas_diff = _extract_canvas_diff(tool_results)
     memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
     system_text = _load_prompt_asset("prompts/v2/plan_system.md")
     system = SystemMessage(content=system_text)
-    human = HumanMessage(content=f"user_text: {user_text}\n" + (f"{memory_ctx}\n" if memory_ctx else ""))
+    human = HumanMessage(
+        content=(
+            f"user_text: {user_text}\n"
+            + (f"{memory_ctx}\n" if memory_ctx else "")
+            + "available_tools (high-level):\n"
+            + "- get_canvas_state: inspect current canvas objects\n"
+            + "- exec_geogebra_commands: create/modify objects on the canvas\n"
+            + "- delete_objects: cleanup objects if needed\n"
+            + "- eval_numeric / eval_expression: check numeric/algebraic properties\n"
+            + f"canvas_objects (latest, up to 12): {canvas_objects}\n"
+            + f"canvas_object_type_counts: {_json_compact(object_type_counts, max_chars=600)}\n"
+            + f"action_ledger: {_json_compact(action_ledger, max_chars=1200)}\n"
+            + (f"canvas_diff (prev turn -> now): {_json_compact(canvas_diff, max_chars=1200)}\n" if canvas_diff else "")
+        )
+    )
 
     structured = llm.with_structured_output(PlanSteps)
 
     def invoke_structured() -> PlanSteps | None:
         try:
-            result = structured.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="plan", role="plan"))
+            result = structured.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="plan", role="main"))
         except Exception as e:
             if run_id:
                 trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_plan.structured_invoke", exc=e)
@@ -1356,7 +1378,7 @@ def generate_plan(
 
     def invoke_json_fallback() -> list[str] | None:
         try:
-            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="plan", role="plan"))
+            msg = llm.invoke([system, human], config=_build_runnable_config(run_id=run_id, op="plan", role="main"))
         except Exception as e:
             if run_id:
                 trace_exception(run_id=run_id, ui_debug=ui_debug, where="generate_plan.json_invoke", exc=e)

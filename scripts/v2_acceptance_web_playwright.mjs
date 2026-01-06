@@ -65,8 +65,9 @@ function isPortFree(port) {
     const server = net.createServer();
     server.once('error', () => resolve(false));
     server.once('listening', () => server.close(() => resolve(true)));
-    // Bind on all interfaces to catch IPv4/IPv6/dual-stack listeners.
-    server.listen(port);
+    // Bind explicitly on IPv4 localhost. Some dev servers bind to 127.0.0.1 only, and
+    // Node's default listen() may use IPv6 (::) which would miss that collision.
+    server.listen({ port, host: '127.0.0.1' });
   });
 }
 

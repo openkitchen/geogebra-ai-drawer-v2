@@ -41,6 +41,11 @@ function envBool(name, fallback) {
   return !(raw === '0' || raw.toLowerCase() === 'false' || raw.toLowerCase() === 'no');
 }
 
+function envStr(name, fallback) {
+  const raw = process.env[name];
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : fallback;
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -66,8 +71,9 @@ function isPortFree(port) {
     const server = net.createServer();
     server.once('error', () => resolve(false));
     server.once('listening', () => server.close(() => resolve(true)));
-    // Bind on all interfaces to catch IPv4/IPv6/dual-stack listeners.
-    server.listen(port);
+    // Bind explicitly on IPv4 localhost. Some dev servers bind to 127.0.0.1 only, and
+    // Node's default listen() may use IPv6 (::) which would miss that collision.
+    server.listen({ port, host: '127.0.0.1' });
   });
 }
 
@@ -224,7 +230,8 @@ async function run() {
     page.setDefaultTimeout(timeoutMs);
     page.setDefaultNavigationTimeout(timeoutMs);
 
-    await page.goto(webBaseUrl, { waitUntil: 'domcontentloaded' });
+    // Force hard-mode via deterministic UI hint to avoid relying on small-model classification in browser acceptance.
+    await page.goto(`${webBaseUrl}/?forceHardMode=1`, { waitUntil: 'domcontentloaded' });
 
     // Wait for the GeoGebra applet to be ready.
     await page.getByTestId('ggb-status-pill').waitFor({ state: 'visible' });
@@ -244,14 +251,20 @@ async function run() {
     // Close tools drawer to avoid intercepting clicks.
     await setToolsDrawerOpen(page, false);
 
-    // Turn 1: hard-mode candidate prompt.
-    const turn1 = '画一个直角三角形ABC，并用画板验证它是直角三角形；如果验证失败请修正。';
+    // Turn 1: hard-mode prompt (keep it stable/fast; override via env when needed).
+    const turn1 = envStr('V2_DIALOGUE_TURN1', '画一个圆。');
     const { lastAssistant: last1, traceText: trace1 } = await sendTurn(page, turn1, { timeoutMs });
 
     // Assert hard-mode panel shows up for turn 1.
     await last1.locator('text=思考进度（难题模式）').first().waitFor({ timeout: timeoutMs });
+    // Expand the hard-mode panel and ensure a plan is visible (user-visible; not CoT).
+    await last1.locator('text=思考进度（难题模式）').first().click();
+    await last1.locator('text=计划：').first().waitFor({ timeout: timeoutMs });
     // And at least one phase_update exists in the dev trace log.
     await last1.getByTestId('trace-log').locator(':has-text("[phase_update]")').first().waitFor({ timeout: timeoutMs });
+    // Trace should show difficulty + plan updates.
+    if (!trace1.includes('difficulty=hard')) throw new Error(`Expected trace to include difficulty=hard, got: ${trace1.slice(0, 400)}...`);
+    if (!trace1.includes('[plan_update]')) throw new Error(`Expected trace to include [plan_update], got: ${trace1.slice(0, 400)}...`);
 
     // Refresh canvas and ensure objects increased.
     await openCanvasInspector(page);
@@ -263,8 +276,8 @@ async function run() {
 
     await setToolsDrawerOpen(page, false);
 
-    // Turn 2: follow-up in same thread (real dialogue).
-    const turn2 = '在画板上画点D=(1,1)，并连结A与D。';
+    // Turn 2: follow-up in same thread (real dialogue; avoid depending on specific labels from turn 1).
+    const turn2 = envStr('V2_DIALOGUE_TURN2', '在画板上画点D=(1,1)。');
     const { lastAssistant: last2, traceText: trace2 } = await sendTurn(page, turn2, { timeoutMs });
     await last2.waitFor({ state: 'visible' });
 

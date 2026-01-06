@@ -1,4 +1,4 @@
-Generate a short internal plan for this user request.
+Generate a short, user-visible high-level approach plan (NOT private chain-of-thought).
 
 Output format (STRICT): return ONLY JSON:
 {
@@ -7,5 +7,6 @@ Output format (STRICT): return ONLY JSON:
 
 Rules:
 - `steps` must be 3–6 short Chinese phrases.
-- Each step should be one action (e.g. "读取画板对象", "生成作图命令", "执行并检查结果", "用孩子能懂的话解释").
-- Do NOT include tool_call_id, run_id, or any low-level debug details.
+- Each step should be one action. Prefer "阶段式" steps for hard geometry: "提出假设" → "构造/作图" → "用画板/数值验证" → "根据反馈修正" → "总结".
+- Use the provided canvas snapshot + tool capabilities to make the steps concrete, but NEVER include raw commands.
+- Do NOT include tool_call_id, run_id, model/provider names, or any low-level debug details.

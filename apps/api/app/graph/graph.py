@@ -51,11 +51,12 @@ _builder.add_conditional_edges(
     lambda state: state["next_step_kind"],
     {
         "tool": "frontend_tool_node",
+        "plan": "plan_node",
         "final": "finalize_node",
     },
 )
 _builder.add_edge(START, "ingest_node")
-_builder.add_edge("ingest_node", "plan_node")
+_builder.add_edge("ingest_node", "act_node")
 _builder.add_edge("plan_node", "act_node")
 _builder.add_edge("frontend_tool_node", "act_node")
 _builder.add_edge("finalize_node", END)

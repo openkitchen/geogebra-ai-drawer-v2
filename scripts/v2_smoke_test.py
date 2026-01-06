@@ -543,6 +543,7 @@ def run_smoke(
     intent_hint: dict[str, Any] | None = None,
     require_difficulty_update: bool = False,
     require_difficulty: str | None = None,
+    require_plan_update: bool = False,
     require_phases: set[str] | None = None,
 ) -> int:
     if thread_id is None:
@@ -571,6 +572,7 @@ def run_smoke(
 
     difficulty_seen = False
     difficulty_value: str | None = None
+    plan_seen = False
     phase_names: set[str] = set()
 
     for ev in _http_sse(
@@ -586,6 +588,10 @@ def run_smoke(
         if ev.event == "difficulty_update" and isinstance(ev.data, dict):
             difficulty_seen = True
             difficulty_value = str(ev.data.get("difficulty") or "") or None
+        if ev.event == "plan_update" and isinstance(ev.data, dict):
+            plan = ev.data.get("plan")
+            if isinstance(plan, list) and plan:
+                plan_seen = True
         if ev.event == "phase_update" and isinstance(ev.data, dict):
             ph = ev.data.get("phase")
             if isinstance(ph, str) and ph.strip():
@@ -628,6 +634,9 @@ def run_smoke(
             return 2
 
     if interrupt is None:
+        if require_plan_update and not plan_seen:
+            print("ERR: required plan_update not seen", file=sys.stderr)
+            return 2
         if required:
             missing = sorted(required - seen_tools)
             print(f"ERR: required tool(s) not seen: {missing}", file=sys.stderr)
@@ -687,6 +696,10 @@ def run_smoke(
             if ev.event == "difficulty_update" and isinstance(ev.data, dict):
                 difficulty_seen = True
                 difficulty_value = str(ev.data.get("difficulty") or "") or None
+            if ev.event == "plan_update" and isinstance(ev.data, dict):
+                plan = ev.data.get("plan")
+                if isinstance(plan, list) and plan:
+                    plan_seen = True
             if ev.event == "phase_update" and isinstance(ev.data, dict):
                 ph = ev.data.get("phase")
                 if isinstance(ph, str) and ph.strip():
@@ -725,6 +738,9 @@ def run_smoke(
                 if got != want:
                     print(f"ERR: difficulty mismatch want={want} got={got}", file=sys.stderr)
                     return 2
+            if require_plan_update and not plan_seen:
+                print("ERR: required plan_update not seen", file=sys.stderr)
+                return 2
             required_phase_set = {p.strip() for p in (require_phases or set()) if p and p.strip()}
             if required_phase_set:
                 missing_phases = sorted(required_phase_set - phase_names)
@@ -776,6 +792,11 @@ def main(argv: list[str]) -> int:
         help="Require at least one phase_update with this phase name (repeatable).",
     )
     parser.add_argument(
+        "--require-plan-update",
+        action="store_true",
+        help="Require that the run emits a non-empty plan_update event.",
+    )
+    parser.add_argument(
         "--force-hard-mode",
         action="store_true",
         help="Send ui_context.intent_hint={difficulty:'hard'} for stable hard-mode acceptance.",
@@ -822,6 +843,7 @@ def main(argv: list[str]) -> int:
                 intent_hint=intent_hint,
                 require_difficulty_update=bool(args.require_difficulty_update),
                 require_difficulty=args.require_difficulty,
+                require_plan_update=bool(args.require_plan_update),
                 require_phases=require_phases,
             )
             if code != 0:

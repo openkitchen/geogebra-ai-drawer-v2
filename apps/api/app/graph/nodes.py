@@ -190,6 +190,7 @@ def ingest_node(state: GraphState) -> dict:
         "phase_update": {},
         "fatal_error": fatal_error,
         "plan_mode": plan_mode,
+        "plan_generated": False,
         "memory_messages": memory_messages,
         "memory_summary": memory_summary,
         "model_calls_used": model_calls_used,
@@ -206,20 +207,32 @@ def plan_node(state: GraphState) -> dict:
     if not user_text:
         return {"plan": []}
 
+    if state.get("plan_generated") is True:
+        return {"plan": state.get("plan") or []}
+
     run_id = state.get("run_id")
     ui_debug = bool(state.get("ui_debug"))
     model_calls_used = int(state.get("model_calls_used", 0))
     model_calls_limit = int(state.get("model_calls_limit", 6))
 
-    can_use_llm = load_llm_config(role=os.getenv("V2_LLM_PLAN_ROLE") or "main") is not None
+    # Planning must use an advanced/main role (small models are not reliable for planning).
+    # `generate_plan()` will enforce this again; here we just check that we can call an LLM at all.
+    can_use_llm = load_llm_config(role="main") is not None
     if not can_use_llm or model_calls_used >= model_calls_limit:
-        return {"plan": []}
+        return {
+            "plan": [],
+            "fatal_error": {
+                "code": "plan_llm_unavailable",
+                "message": "难题模式需要主模型生成计划，但当前未配置 main 角色或已达到模型预算上限。",
+            },
+        }
 
     model_calls_used += 1
     steps = generate_plan(
         user_text=user_text,
         memory_summary=state.get("memory_summary") or None,
         recent_messages=state.get("memory_messages") or None,
+        tool_results=state.get("tool_results") or None,
         run_id=run_id,
         ui_debug=ui_debug,
     )
@@ -241,7 +254,13 @@ def plan_node(state: GraphState) -> dict:
             next_step=(top_steps or "开始读取画板状态，然后按计划构造。"),
         )
 
-    return {**phase, "plan": plan, "model_calls_used": model_calls_used, "model_calls_limit": model_calls_limit}
+    return {
+        **phase,
+        "plan": plan,
+        "plan_generated": True,
+        "model_calls_used": model_calls_used,
+        "model_calls_limit": model_calls_limit,
+    }
 
 
 def act_node(state: GraphState) -> dict:
@@ -255,6 +274,7 @@ def act_node(state: GraphState) -> dict:
     remaining = max(0, tool_calls_limit - tool_calls_used)
     attempt = int(state.get("attempt", 0))
     max_attempts = int(state.get("max_attempts", 2))
+    hard_mode = bool(state.get("hard_mode"))
     intent_flags = get_intent_flags(state)
     is_draw_request = intent_flags["wants_draw"] and not intent_flags["forbids_drawing"]
 
@@ -444,6 +464,21 @@ def act_node(state: GraphState) -> dict:
             "model_calls_limit": model_calls_limit,
             "attempt": attempt,
             "max_attempts": max_attempts,
+        }
+
+    # In hard-mode, generate a high-level plan AFTER we inspected the canvas at least once.
+    # This allows the planner to be canvas-aware (it can see current objects/state).
+    if hard_mode and state.get("plan_generated") is not True and remaining >= 0:
+        return {
+            **_emit_phase_update(
+                state,
+                "Plan",
+                summary="已读取画板状态，正在生成整体思路。",
+                next_step="生成计划后再开始作图与验证循环。",
+            ),
+            "next_step_kind": "plan",
+            "model_calls_used": model_calls_used,
+            "model_calls_limit": model_calls_limit,
         }
 
     pending_delete = state.get("pending_delete_objects")

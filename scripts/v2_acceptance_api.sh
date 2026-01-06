@@ -88,6 +88,7 @@ if [[ "$FAIL_ON_EXCEPTION" != "0" && "$FAIL_ON_EXCEPTION" != "false" ]]; then
     --user-text "画一个圆" \
     --force-hard-mode \
     --require-tool exec_geogebra_commands \
+    --require-plan-update \
     --require-difficulty hard \
     --require-phase Plan \
     --require-phase Understand \
@@ -99,6 +100,7 @@ else
     --user-text "画一个圆" \
     --force-hard-mode \
     --require-tool exec_geogebra_commands \
+    --require-plan-update \
     --require-difficulty hard \
     --require-phase Plan \
     --require-phase Understand \
