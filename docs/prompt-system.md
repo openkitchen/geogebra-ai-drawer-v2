@@ -38,6 +38,7 @@ Goals:
 - `action_ledger`：最近 M 次**会改变画板**的工具动作摘要（主要是 `exec_geogebra_commands` / `delete_objects`），含：
   - `run_id` / `tool_name` / `ok`
   - `created_objects` / `deleted_objects`
+  - （失败时）`failed_count` / `failed_preview` / `rolled_back_objects` / `rollback_errors_count`
   - `commands_preview`（仅预览，避免过长）
 - `object_provenance`：对象归因表（仅针对 `canvas_objects` 中出现的对象）：
   - `name -> created_by_run_id | unknown`

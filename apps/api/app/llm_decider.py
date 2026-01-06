@@ -698,6 +698,7 @@ def _compact_action_ledger(tool_results: list[dict[str, Any]] | None, *, max_act
         resume = entry.get("resume")
         ok = isinstance(resume, dict) and resume.get("ok") is True
         output = resume.get("output") if isinstance(resume, dict) else None
+        error = resume.get("error") if isinstance(resume, dict) else None
 
         action: dict[str, Any] = {
             "run_id": entry.get("run_id"),
@@ -705,17 +706,22 @@ def _compact_action_ledger(tool_results: list[dict[str, Any]] | None, *, max_act
             "tool_call_id": entry.get("tool_call_id"),
             "ok": ok,
         }
+        if not ok and error is not None:
+            action["error"] = error
 
         if tool_name == "exec_geogebra_commands":
             inp = entry.get("input")
             if isinstance(inp, dict) and isinstance(inp.get("commands"), list):
                 action["commands_preview"] = [str(x) for x in inp.get("commands", [])[:8]]
 
-            if ok and isinstance(output, dict):
+            if isinstance(output, dict):
                 created = output.get("created_objects")
                 deleted = output.get("deleted_objects")
                 dialogs = output.get("dialogs")
                 warnings = output.get("quality_warnings")
+                rolled_back = output.get("rolled_back_objects")
+                rollback_errors = output.get("rollback_errors")
+                results = output.get("results")
                 if isinstance(created, list):
                     action["created_objects"] = [str(x) for x in created if isinstance(x, str) and x.strip()][:30]
                 if isinstance(deleted, list):
@@ -724,6 +730,29 @@ def _compact_action_ledger(tool_results: list[dict[str, Any]] | None, *, max_act
                     action["dialogs"] = [str(x) for x in dialogs if isinstance(x, str) and x.strip()][:6]
                 if isinstance(warnings, list):
                     action["quality_warnings"] = [str(x) for x in warnings if isinstance(x, str) and x.strip()][:6]
+                if isinstance(rolled_back, list):
+                    action["rolled_back_objects"] = [str(x) for x in rolled_back if isinstance(x, str) and x.strip()][:30]
+                if isinstance(rollback_errors, list):
+                    action["rollback_errors_count"] = len([x for x in rollback_errors if isinstance(x, dict)])
+                if isinstance(results, list):
+                    failed = [r for r in results if isinstance(r, dict) and r.get("ok") is False]
+                    if failed:
+                        action["failed_count"] = len(failed)
+                        preview: list[dict[str, Any]] = []
+                        for r in failed[:3]:
+                            cmd = r.get("command")
+                            err = r.get("error")
+                            item: dict[str, Any] = {}
+                            if isinstance(cmd, str) and cmd.strip():
+                                item["command"] = cmd.strip()
+                            if isinstance(err, dict):
+                                msg = err.get("message")
+                                if isinstance(msg, str) and msg.strip():
+                                    item["error"] = msg.strip()
+                            if item:
+                                preview.append(item)
+                        if preview:
+                            action["failed_preview"] = preview
 
         if tool_name == "delete_objects" and ok and isinstance(output, dict):
             deleted = output.get("deleted_objects")

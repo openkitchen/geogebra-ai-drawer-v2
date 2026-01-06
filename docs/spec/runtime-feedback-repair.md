@@ -22,6 +22,7 @@
 补充（v2 落地约定）：
 - 硬失败：前端工具 `exec_geogebra_commands` 可直接自动回滚本次 `created_objects`。
 - 语义失败：后端可触发前端工具 `delete_objects` 做 deterministic 回滚（避免让 LLM 自己拼 Delete 命令）。
+- 失败信号：当 `exec_geogebra_commands` 任一命令失败（或发生回滚）时，前端应通过 `/resume` 回填 `ok=false`，并提供 `error`（必填）与结构化 `output`（包含 `results[]` / `rolled_back_objects` 等）用于修复。
 
 ### 何时终止
 - 达到重试上限仍失败：向用户返回“修正失败”并保留干净画面（已回滚）。***

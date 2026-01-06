@@ -43,6 +43,7 @@ class GraphState(TypedDict, total=False):
     last_exec_created_objects: list[str]
     last_exec_had_failure: bool
     last_exec_dialogs: list[str]
+    last_exec_rolled_back_objects: list[str]
     last_verify_issues: list[str]
     pending_numeric_eval: dict[str, Any]
     measured_triangle_kinds: dict[str, str]

@@ -72,6 +72,48 @@ def build_runtime_feedback(state: GraphState, issues: list[str]) -> str:
         for issue in issues[:12]:
             lines.append(f"- {issue}")
 
+    # Capture tool-level execution failures (per-command) for repair.
+    tool_results = state.get("tool_results")
+    if isinstance(tool_results, list):
+        for entry in reversed(tool_results):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("tool_name") != "exec_geogebra_commands":
+                continue
+            resume = entry.get("resume")
+            if not isinstance(resume, dict):
+                break
+            output = resume.get("output")
+            if isinstance(output, dict):
+                results = output.get("results")
+                if isinstance(results, list):
+                    failed: list[dict[str, str]] = []
+                    for r in results[:60]:
+                        if not isinstance(r, dict) or r.get("ok") is not False:
+                            continue
+                        cmd = r.get("command")
+                        err = r.get("error")
+                        cmd_s = cmd.strip() if isinstance(cmd, str) else ""
+                        msg_s = ""
+                        if isinstance(err, dict):
+                            msg = err.get("message")
+                            if isinstance(msg, str):
+                                msg_s = msg.strip()
+                        if cmd_s:
+                            failed.append({"command": cmd_s, "message": msg_s})
+                        if len(failed) >= 6:
+                            break
+                    for item in failed:
+                        msg = item.get("message") or "Command failed"
+                        lines.append(f'Command failed: "{item.get("command")}" ({msg})')
+
+                rb = output.get("rolled_back_objects")
+                if isinstance(rb, list):
+                    names = [str(x) for x in rb if isinstance(x, str) and x.strip()]
+                    if names:
+                        lines.append(f"Rolled back: {', '.join(names[:60])}{' …' if len(names) > 60 else ''}.")
+            break
+
     dialogs = state.get("last_exec_dialogs")
     if isinstance(dialogs, list) and dialogs:
         for d in dialogs[:6]:
@@ -149,4 +191,3 @@ def render_draw_failure_answer(state: GraphState) -> str:
         lines.append(f"- run_id: {run_id}")
 
     return "\n".join(lines).strip()
-

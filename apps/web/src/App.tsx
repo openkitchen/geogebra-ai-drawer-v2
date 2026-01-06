@@ -286,7 +286,7 @@ export default function App() {
           tool_name: pendingInterrupt.data.tool_name,
           tool_call_id: pendingInterrupt.data.tool_call_id,
           ok: toolResult.ok,
-          output: toolResult.ok ? toolResult.output : null,
+          output: toolResult.ok ? toolResult.output : (toolResult.output ?? null),
           error: toolResult.ok ? undefined : toolResult.error,
         };
         pendingInterrupt = await consume(

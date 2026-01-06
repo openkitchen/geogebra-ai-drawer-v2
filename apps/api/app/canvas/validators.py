@@ -17,6 +17,13 @@ def verify_canvas(state: Mapping[str, Any]) -> tuple[bool, list[str]]:
     intent = state.get("intent")
     intent_d: dict[str, Any] = intent if isinstance(intent, dict) else {}
 
+    if state.get("last_exec_had_failure") is True:
+        rolled_back = state.get("last_exec_rolled_back_objects")
+        if isinstance(rolled_back, list) and rolled_back:
+            issues.append("exec_geogebra_commands_failed:rolled_back")
+        else:
+            issues.append("exec_geogebra_commands_failed")
+
     diag = state.get("canvas_diagnostics")
     if isinstance(diag, dict) and diag.get("ok") is False:
         if diag.get("zero_length_segments"):
@@ -90,5 +97,4 @@ def verify_canvas(state: Mapping[str, Any]) -> tuple[bool, list[str]]:
             issues.append("inscribed_triangle:vertices_not_on_same_circle")
 
     return (len(issues) == 0), issues
-
 

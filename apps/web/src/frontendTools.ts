@@ -21,6 +21,7 @@ export type FrontendToolOk = {
 export type FrontendToolErr = {
   ok: false;
   error: { message: string };
+  output?: unknown;
 };
 
 export type FrontendToolResult = FrontendToolOk | FrontendToolErr;
@@ -447,7 +448,29 @@ export async function runFrontendTool(args: {
     }
 
     if (args.toolName === 'exec_geogebra_commands') {
-      return { ok: true, output: execGeogebraCommands(args.input, api) };
+      const output = execGeogebraCommands(args.input, api);
+      const hasFailure = Array.isArray(output.results) && output.results.some((r) => r.ok === false);
+      const didRollback =
+        (Array.isArray(output.rolled_back_objects) && output.rolled_back_objects.length > 0) ||
+        (Array.isArray(output.rollback_errors) && output.rollback_errors.length > 0);
+
+      if (hasFailure || didRollback) {
+        const firstFailure = (output.results || []).find((r) => r.ok === false) ?? null;
+        const firstCmd = firstFailure?.command ? String(firstFailure.command).trim() : '';
+        const firstErr = firstFailure?.error && typeof firstFailure.error === 'object' ? (firstFailure.error as any).message : null;
+        const firstErrMsg = typeof firstErr === 'string' && firstErr.trim() ? firstErr.trim() : '';
+
+        const summaryParts = [
+          'GeoGebra commands failed.',
+          firstCmd ? `first_failed_command="${firstCmd}"` : '',
+          firstErrMsg ? `error="${firstErrMsg}"` : '',
+          didRollback ? 'rolled_back=true' : '',
+        ].filter(Boolean);
+
+        return { ok: false, error: { message: summaryParts.join(' ') }, output };
+      }
+
+      return { ok: true, output };
     }
 
     if (args.toolName === 'delete_objects') {

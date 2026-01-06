@@ -177,6 +177,7 @@ def ingest_node(state: GraphState) -> dict:
         "last_exec_created_objects": [],
         "last_exec_had_failure": False,
         "last_exec_dialogs": [],
+        "last_exec_rolled_back_objects": [],
         "last_verify_issues": [],
         "pending_numeric_eval": {},
         "measured_triangle_kinds": {},
@@ -798,6 +799,65 @@ def act_node(state: GraphState) -> dict:
         feedback = build_runtime_feedback(state, issues)
         created = state.get("last_exec_created_objects") or []
         objects = [x for x in created if isinstance(x, str) and x.strip()]
+
+        # If tool execution failed (or nothing new was created), prefer an immediate regen without an extra cleanup tool call.
+        # This avoids a dead-end where we can't "repair" just because `created_objects` is empty (e.g., early command failure).
+        had_exec_failure = state.get("last_exec_had_failure") is True
+        rolled_back = state.get("last_exec_rolled_back_objects")
+        did_rollback = isinstance(rolled_back, list) and len([x for x in rolled_back if isinstance(x, str) and x.strip()]) > 0
+        if attempt < max_attempts and remaining >= 2 and (had_exec_failure or did_rollback or not objects):
+            can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
+            if can_use_llm:
+                model_calls_used += 1
+                commands = generate_geogebra_commands(
+                    user_text=user_text,
+                    tool_calls_used=tool_calls_used,
+                    tool_calls_limit=tool_calls_limit,
+                    tool_results=state.get("tool_results"),
+                    runtime_feedback=feedback,
+                    memory_summary=state.get("memory_summary") or None,
+                    recent_messages=state.get("memory_messages") or None,
+                    run_id=run_id,
+                    ui_debug=ui_debug,
+                )
+                if commands:
+                    return {
+                        **_emit_phase_update(
+                            state,
+                            "Revise",
+                            summary="检测到执行失败或未生成有效对象：直接换一种更稳的作图方法再试一次。",
+                            result="验证未通过",
+                            next_step="重新生成完整作图步骤并执行，然后刷新画板再验证。",
+                        ),
+                        "last_verify_issues": issues,
+                        "repair_feedback": feedback,
+                        "regen_needed": False,
+                        "give_up_after_cleanup": False,
+                        "attempt": attempt + 1,
+                        "did_draw": True,
+                        "needs_canvas_refresh": True,
+                        "next_step_kind": "tool",
+                        "next_tool_name": "exec_geogebra_commands",
+                        "next_tool_call_id": str(uuid.uuid4()),
+                        "next_tool_input": {"commands": commands},
+                        "model_calls_used": model_calls_used,
+                        "model_calls_limit": model_calls_limit,
+                    }
+
+            return {
+                **_emit_phase_update(
+                    state,
+                    "Finalize",
+                    summary="无法进行修复：当前模型不可用。",
+                    result="Failed",
+                    next_step="请检查服务端模型配置后重试。",
+                ),
+                "last_verify_issues": issues,
+                "next_step_kind": "final",
+                "answer_text": llm_unavailable_text(state),
+                "model_calls_used": model_calls_used,
+                "model_calls_limit": model_calls_limit,
+            }
         if attempt < max_attempts and remaining >= 4 and objects:
             return {
                 **_emit_phase_update(
@@ -1000,22 +1060,39 @@ def frontend_tool_node(state: GraphState) -> dict:
     if tool_name == "exec_geogebra_commands":
         created_objects: list[str] = []
         dialogs: list[str] = []
+        rolled_back_objects: list[str] = []
         had_failure = False
-        if isinstance(resume_value, dict) and resume_value.get("ok") is True:
-            output = resume_value.get("output")
-            if isinstance(output, dict):
-                created = output.get("created_objects")
-                if isinstance(created, list):
-                    created_objects = [str(x) for x in created if isinstance(x, str) and x.strip()]
-                ds = output.get("dialogs")
-                if isinstance(ds, list):
-                    dialogs = [str(x) for x in ds if isinstance(x, str) and x.strip()]
-                results = output.get("results")
-                if isinstance(results, list):
-                    had_failure = any(isinstance(r, dict) and r.get("ok") is False for r in results)
+
+        if isinstance(resume_value, dict):
+            ok_flag = resume_value.get("ok") is True
+            output = resume_value.get("output") if isinstance(resume_value.get("output"), dict) else {}
+
+            created = output.get("created_objects")
+            if isinstance(created, list):
+                created_objects = [str(x) for x in created if isinstance(x, str) and x.strip()]
+
+            ds = output.get("dialogs")
+            if isinstance(ds, list):
+                dialogs = [str(x) for x in ds if isinstance(x, str) and x.strip()]
+
+            rb = output.get("rolled_back_objects")
+            if isinstance(rb, list):
+                rolled_back_objects = [str(x) for x in rb if isinstance(x, str) and x.strip()]
+
+            results = output.get("results")
+            if isinstance(results, list):
+                had_failure = any(isinstance(r, dict) and r.get("ok") is False for r in results)
+
+            rb_errors = output.get("rollback_errors")
+            if isinstance(rb_errors, list) and rb_errors:
+                had_failure = True
+
+            if not ok_flag:
+                had_failure = True
         updates["last_exec_created_objects"] = created_objects
         updates["last_exec_dialogs"] = dialogs
         updates["last_exec_had_failure"] = had_failure
+        updates["last_exec_rolled_back_objects"] = rolled_back_objects
 
     if tool_name == "eval_numeric":
         measured_prev = state.get("measured_triangle_kinds")
