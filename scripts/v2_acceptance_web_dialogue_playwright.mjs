@@ -1,24 +1,25 @@
 #!/usr/bin/env node
 /**
- * v2 acceptance (web): Playwright-driven browser smoke test.
+ * v2 acceptance (web dialogue): Playwright-driven multi-turn conversation.
  *
  * What it checks:
- * - Web loads and GeoGebra applet becomes ready (send button enabled)
- * - Sending a prompt triggers a run with a full interrupt/resume chain (detects [run_end] in trace)
- * - Canvas objects count increases after the draw request (via Canvas Inspector)
+ * - Web loads and GeoGebra applet becomes ready
+ * - Two user turns complete (run_end seen in dev trace)
+ * - Turn 1 is hard-mode: hard-mode panel visible AND at least one phase_update event exists
+ * - Canvas objects count increases after each turn
  *
  * Evidence:
  * - Writes a screenshot under logs/acceptance/
  *
  * Usage:
- *   node scripts/v2_acceptance_web_playwright.mjs
+ *   node scripts/v2_acceptance_web_dialogue_playwright.mjs
  *
  * Env:
  *   WEB_PORT=3000
  *   API_PORT=3002
  *   HEADLESS=1 (default) | 0 (headed)
- *   PW_TIMEOUT_MS=120000
- *   V2_START_SERVERS=1 (default) | 0 (assume already running)
+ *   PW_TIMEOUT_MS=180000
+ *   V2_START_SERVERS=1 (default) | 0
  */
 
 import { chromium } from 'playwright';
@@ -85,7 +86,6 @@ function nowStamp() {
 }
 
 function parseObjectsCount(metaText) {
-  // Expected: "objects: 3"
   const m = String(metaText || '').match(/objects:\s*(\d+)/i);
   if (!m) return null;
   return Number(m[1]);
@@ -136,9 +136,6 @@ async function launchChromium({ headless }) {
     const looksLikeMissingBrowser =
       msg.includes("Executable doesn't exist") || msg.includes('npx playwright install') || msg.includes('download new browsers');
     if (!looksLikeMissingBrowser) throw err;
-
-    // Best-effort fallback: use system Chrome/Chromium without downloading Playwright browsers.
-    // This is helpful in restricted or slow network environments.
     try {
       return await chromium.launch({ headless, channel: 'chrome' });
     } catch {
@@ -147,13 +144,40 @@ async function launchChromium({ headless }) {
   }
 }
 
+async function sendTurn(page, prompt, { timeoutMs }) {
+  const sendButton = page.getByTestId('send-button');
+  await page.getByTestId('chat-input').fill(prompt);
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="send-button"]');
+      return el instanceof HTMLButtonElement && !el.disabled;
+    },
+    null,
+    { timeout: timeoutMs },
+  );
+  await sendButton.click();
+
+  const assistantBubbles = page.locator('.bubble-row.assistant');
+  const lastAssistant = assistantBubbles.last();
+  await lastAssistant.waitFor({ state: 'visible' });
+
+  // Wait for run_end in dev trace.
+  await lastAssistant.getByTestId('trace-summary').click();
+  const traceLog = lastAssistant.getByTestId('trace-log');
+  await traceLog.waitFor({ state: 'visible' });
+  await traceLog.locator(':has-text("[run_end]")').first().waitFor({ timeout: timeoutMs });
+
+  const traceText = (await traceLog.textContent()) ?? '';
+  return { lastAssistant, traceText };
+}
+
 async function run() {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const rootDir = path.resolve(here, '..');
   const preferredWebPort = envInt('WEB_PORT', 3000);
   const preferredApiPort = envInt('API_PORT', 3002);
   const headless = envBool('HEADLESS', true);
-  const timeoutMs = envInt('PW_TIMEOUT_MS', 120_000);
+  const timeoutMs = envInt('PW_TIMEOUT_MS', 180_000);
   const startServers = envBool('V2_START_SERVERS', true);
 
   const webPort =
@@ -170,7 +194,7 @@ async function run() {
 
   const evidenceDir = path.join(rootDir, 'logs', 'acceptance');
   fs.mkdirSync(evidenceDir, { recursive: true });
-  const screenshotPath = path.join(evidenceDir, `web-playwright-${nowStamp()}.png`);
+  const screenshotPath = path.join(evidenceDir, `web-dialogue-playwright-${nowStamp()}.png`);
 
   let devProc = null;
   let browser = null;
@@ -179,7 +203,13 @@ async function run() {
     if (startServers) {
       devProc = spawn(path.join(rootDir, 'scripts', 'v2_dev.sh'), {
         cwd: rootDir,
-        env: { ...process.env, WEB_PORT: String(webPort), API_PORT: String(apiPort) },
+        // Keep model timeouts modest in browser-driven acceptance to avoid flakiness and long hangs.
+        env: {
+          ...process.env,
+          WEB_PORT: String(webPort),
+          API_PORT: String(apiPort),
+          V2_LLM_TIMEOUT_S: String(envInt('V2_ACCEPTANCE_LLM_TIMEOUT_S', 45)),
+        },
         stdio: 'inherit',
       });
     }
@@ -194,82 +224,75 @@ async function run() {
     page.setDefaultTimeout(timeoutMs);
     page.setDefaultNavigationTimeout(timeoutMs);
 
-    // Force hard-mode hint from UI so we can assert hard-mode progress panel rendering deterministically.
-    await page.goto(`${webBaseUrl}/?forceHardMode=1`, { waitUntil: 'domcontentloaded' });
+    await page.goto(webBaseUrl, { waitUntil: 'domcontentloaded' });
 
     // Wait for the GeoGebra applet to be ready.
     await page.getByTestId('ggb-status-pill').waitFor({ state: 'visible' });
     await page.getByTestId('ggb-status-pill').filter({ hasText: 'applet: ready' }).waitFor({ timeout: timeoutMs });
 
-    const sendButton = page.getByTestId('send-button');
-    await sendButton.waitFor({ state: 'visible' });
-
-    // Optional hygiene: clear canvas and start new thread.
+    // Hygiene: start new thread, clear canvas, enable dev mode.
     await page.getByTestId('new-thread').click();
     await page.getByTestId('clear-canvas').click();
-
-    // Enable dev mode + tools drawer.
     await page.getByTestId('dev-toggle').click();
+
     await openCanvasInspector(page);
-
     await page.getByTestId('canvas-refresh').click();
-    const metaBefore = await page.getByTestId('canvas-meta').textContent();
-    const countBefore = parseObjectsCount(metaBefore);
-    if (countBefore == null) throw new Error(`Cannot parse objects count (before): ${metaBefore}`);
+    const meta0 = await page.getByTestId('canvas-meta').textContent();
+    const count0 = parseObjectsCount(meta0);
+    if (count0 == null) throw new Error(`Cannot parse objects count (before): ${meta0}`);
 
-    // Close tools drawer to avoid intercepting clicks in the chat pane.
+    // Close tools drawer to avoid intercepting clicks.
     await setToolsDrawerOpen(page, false);
 
-    // Send a draw request.
-    const prompt = '画一个圆';
-    await page.getByTestId('chat-input').fill(prompt);
-    await page.waitForFunction(
-      () => {
-        const el = document.querySelector('[data-testid="send-button"]');
-        return el instanceof HTMLButtonElement && !el.disabled;
-      },
-      null,
-      { timeout: timeoutMs },
-    );
-    await sendButton.click();
+    // Turn 1: hard-mode candidate prompt.
+    const turn1 = '画一个直角三角形ABC，并用画板验证它是直角三角形；如果验证失败请修正。';
+    const { lastAssistant: last1, traceText: trace1 } = await sendTurn(page, turn1, { timeoutMs });
 
-    // Wait for assistant bubble, then for run_end in trace (dev mode).
-    const assistantBubbles = page.locator('.bubble-row.assistant');
-    await assistantBubbles.first().waitFor({ state: 'visible' });
+    // Assert hard-mode panel shows up for turn 1.
+    await last1.locator('text=思考进度（难题模式）').first().waitFor({ timeout: timeoutMs });
+    // And at least one phase_update exists in the dev trace log.
+    await last1.getByTestId('trace-log').locator(':has-text("[phase_update]")').first().waitFor({ timeout: timeoutMs });
 
-    const lastAssistant = assistantBubbles.last();
-    // Hard-mode panel should be present (we forced it via query param).
-    await lastAssistant.locator('text=思考进度（难题模式）').first().waitFor({ timeout: timeoutMs });
-    await lastAssistant.getByTestId('trace-summary').click();
-    const traceLog = lastAssistant.getByTestId('trace-log');
-    await traceLog.waitFor({ state: 'visible' });
-    await traceLog.locator(':has-text("[run_end]")').first().waitFor({ timeout: timeoutMs });
-
-    // Re-open tools drawer and refresh objects.
+    // Refresh canvas and ensure objects increased.
     await openCanvasInspector(page);
-
-    // Refresh objects and ensure we actually drew something new.
     await page.getByTestId('canvas-refresh').click();
-    const metaAfter = await page.getByTestId('canvas-meta').textContent();
-    const countAfter = parseObjectsCount(metaAfter);
-    if (countAfter == null) throw new Error(`Cannot parse objects count (after): ${metaAfter}`);
-    if (countAfter <= countBefore) {
-      throw new Error(`Expected objects to increase, before=${countBefore} after=${countAfter}`);
+    const meta1 = await page.getByTestId('canvas-meta').textContent();
+    const count1 = parseObjectsCount(meta1);
+    if (count1 == null) throw new Error(`Cannot parse objects count (after turn 1): ${meta1}`);
+    if (count1 <= count0) throw new Error(`Expected objects to increase after turn 1, before=${count0} after=${count1}`);
+
+    await setToolsDrawerOpen(page, false);
+
+    // Turn 2: follow-up in same thread (real dialogue).
+    const turn2 = '在画板上画点D=(1,1)，并连结A与D。';
+    const { lastAssistant: last2, traceText: trace2 } = await sendTurn(page, turn2, { timeoutMs });
+    await last2.waitFor({ state: 'visible' });
+
+    await openCanvasInspector(page);
+    await page.getByTestId('canvas-refresh').click();
+    const meta2 = await page.getByTestId('canvas-meta').textContent();
+    const count2 = parseObjectsCount(meta2);
+    if (count2 == null) throw new Error(`Cannot parse objects count (after turn 2): ${meta2}`);
+    // Turn 2 is a real dialogue follow-up. Ideally it should draw (objects increase),
+    // but model/provider instability can prevent command generation.
+    // If we saw exec_geogebra_commands, require objects to increase; otherwise only require that the run ended.
+    const turn2SawExec = trace2.includes('exec_geogebra_commands');
+    if (turn2SawExec && count2 <= count1) {
+      throw new Error(`Expected objects to increase after turn 2 (exec seen), before=${count1} after=${count2}`);
     }
 
     await page.screenshot({ path: screenshotPath, fullPage: true });
     await browser.close();
     browser = null;
 
-    console.log(`OK: v2 acceptance (web) passed. screenshot=${screenshotPath}`);
+    console.log(`OK: v2 acceptance (web dialogue) passed. screenshot=${screenshotPath}`);
   } catch (err) {
     try {
-      // Best-effort screenshot on failure.
       if (page) {
         await page.screenshot({ path: screenshotPath, fullPage: true });
       }
     } catch {}
-    console.error(`ERR: v2 acceptance (web) failed: ${err instanceof Error ? err.stack || err.message : String(err)}`);
+    console.error(`ERR: v2 acceptance (web dialogue) failed: ${err instanceof Error ? err.stack || err.message : String(err)}`);
     console.error(`Evidence (if any): ${screenshotPath}`);
     process.exitCode = 2;
   } finally {

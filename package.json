@@ -13,6 +13,7 @@
     "dev:v2:api": "cd apps/api && uv run uvicorn app.main:app --reload --port 3002",
     "dev:v2": "concurrently -n web,api -c \"cyan,magenta\" \"npm run dev:v2:web\" \"npm run dev:v2:api\"",
     "acceptance:v2:web": "node scripts/v2_acceptance_web_playwright.mjs",
+    "acceptance:v2:web:dialogue": "node scripts/v2_acceptance_web_dialogue_playwright.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "start": "NODE_ENV=production node server/index.mjs"
