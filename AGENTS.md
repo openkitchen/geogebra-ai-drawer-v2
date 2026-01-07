@@ -129,6 +129,23 @@ bd sync               # Commit and push changes
 4. **Complete**: Use `bd close <id>`
 5. **Sync**: Always run `bd sync` at session end
 
+### Agent Hard Rules (bd issue id)
+
+当用户输入 **一个看起来像 bd issue id 的短字符串**（通常无空格，使用小写字母/数字/`-` 组成）时，默认把它当作 issue id 处理。
+
+Examples (issue id):
+- `geogebra-ai-drawer-v2-ciy`
+- `geogebra-ai-drawer-v2-dh7`
+- `bd-123`
+
+Required flow:
+1. `bd show <id>` to confirm it exists and read full context
+2. `BD_ACTOR=<agent_name> bd update <id> --claim` (preferred) or `bd update <id> --assignee <agent_name> --status=in_progress`
+3. Only after claiming: run commands / edit code / update docs
+
+Do NOT grep or directly read `.beads/issues.jsonl` to find issues when an id is provided.
+Fallback only when `bd show <id>` fails: use `bd list --all --title-contains ...` and ask for clarification.
+
 ### Key Concepts
 
 - **Dependencies**: Issues can block other issues. `bd ready` shows only unblocked work.
