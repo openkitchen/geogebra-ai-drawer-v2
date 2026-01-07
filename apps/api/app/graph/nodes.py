@@ -69,8 +69,8 @@ def ingest_node(state: GraphState) -> dict:
     model_calls_limit = int(state.get("model_calls_limit", 6))
 
     max_attempts = read_int_env("V2_MAX_ATTEMPTS", 2, min_value=0, max_value=6)
-    max_messages = read_int_env("V2_MEMORY_MAX_MESSAGES", 12, min_value=4, max_value=60)
-    keep_last = read_int_env("V2_MEMORY_KEEP_LAST", 8, min_value=2, max_value=max_messages)
+    max_messages = read_int_env("V2_MEMORY_MAX_MESSAGES", 60, min_value=4, max_value=120)
+    keep_last = read_int_env("V2_MEMORY_KEEP_LAST", 40, min_value=2, max_value=max_messages)
 
     memory_messages = compact_memory_messages(state.get("memory_messages"))
     if user_text:
@@ -985,8 +985,8 @@ def finalize_node(state: GraphState) -> dict:
     model_calls_used = int(state.get("model_calls_used", 0))
     model_calls_limit = int(state.get("model_calls_limit", 6))
 
-    max_messages = read_int_env("V2_MEMORY_MAX_MESSAGES", 12, min_value=4, max_value=60)
-    keep_last = read_int_env("V2_MEMORY_KEEP_LAST", 8, min_value=2, max_value=max_messages)
+    max_messages = read_int_env("V2_MEMORY_MAX_MESSAGES", 60, min_value=4, max_value=120)
+    keep_last = read_int_env("V2_MEMORY_KEEP_LAST", 40, min_value=2, max_value=max_messages)
 
     memory_messages = compact_memory_messages(state.get("memory_messages"))
     if answer_text:
@@ -1020,7 +1020,12 @@ def finalize_node(state: GraphState) -> dict:
 def frontend_tool_node(state: GraphState) -> dict:
     tool_name = state["next_tool_name"]
     tool_call_id = state["next_tool_call_id"]
-    tool_input = state.get("next_tool_input", {})
+    from ..tool_registry import SUPPORTED_TOOL_NAMES, validate_tool_input, validate_tool_output
+
+    if tool_name not in SUPPORTED_TOOL_NAMES:
+        raise ValueError(f"unsupported tool: {tool_name}")
+
+    tool_input = validate_tool_input(tool_name, state.get("next_tool_input", {}))
     run_id = state.get("run_id")
 
     resume_value = interrupt(
@@ -1031,6 +1036,10 @@ def frontend_tool_node(state: GraphState) -> dict:
             "input": tool_input,
         }
     )
+
+    if isinstance(resume_value, dict) and resume_value.get("ok") is True:
+        resume_value = dict(resume_value)
+        resume_value["output"] = validate_tool_output(tool_name, resume_value.get("output"))
 
     tool_calls_used = int(state.get("tool_calls_used", 0)) + 1
     prev_results = state.get("tool_results", [])

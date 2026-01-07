@@ -305,8 +305,11 @@ class ResumeRequest(BaseModel):
 
 
 def get_protocol_schema_v2() -> dict[str, Any]:
+    from .tool_registry import get_tools_schema_bundle
+
     return {
         "protocol_version": PROTOCOL_VERSION,
+        **get_tools_schema_bundle(),
         "schemas": {
             "ToolResumePayload": ToolResumePayload.model_json_schema(),
             "RunStreamEvent": TypeAdapter(RunStreamEvent).json_schema(),

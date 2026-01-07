@@ -24,6 +24,7 @@ export default function App() {
   const [ggbApi, setGgbApi] = useState<GeoGebraAppletApi | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const supportedToolsRef = useRef<string[] | null>(null);
   
   // Dev Mode & State
   const [devMode, setDevMode] = useState(false);
@@ -142,6 +143,23 @@ export default function App() {
     ]);
 
     try {
+      async function ensureSupportedTools(): Promise<void> {
+        if (supportedToolsRef.current) return;
+        try {
+          const res = await fetch('/api/schema/v2', { method: 'GET' });
+          if (!res.ok) return;
+          const json = (await res.json()) as any;
+          const tools = json?.supported_tools;
+          if (Array.isArray(tools) && tools.every((t) => typeof t === 'string')) {
+            supportedToolsRef.current = tools;
+          }
+        } catch {
+          // Best-effort only.
+        }
+      }
+
+      await ensureSupportedTools();
+
       // In dev, the API server can hot-reload and lose in-memory threads, which causes 404s.
       // Recover by creating a new thread and retrying once.
       let effectiveThreadId = threadId ?? (await createThreadId());
@@ -266,6 +284,19 @@ export default function App() {
       while (pendingInterrupt) {
         console.log('[send] processing interrupt:', pendingInterrupt.data);
         if (!runId) throw new Error('Missing run_id before interrupt');
+
+        const supported = supportedToolsRef.current;
+        if (supported && !supported.includes(pendingInterrupt.data.tool_name)) {
+          const message = `Unsupported tool from server: ${pendingInterrupt.data.tool_name}`;
+          appendEvent({ event: 'client_error', data: { at: 'sse', status: 0, statusText: message } });
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId || m.role !== 'assistant') return m;
+              return { ...m, status: 'error', error: message };
+            }),
+          );
+          break;
+        }
 
         const cacheKey = pendingInterrupt.data.tool_call_id;
         let toolResult = toolResultCache.get(cacheKey);

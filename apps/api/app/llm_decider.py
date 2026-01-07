@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ValidationError, model_validator
 
@@ -23,7 +23,9 @@ from .protocol_v2 import (
 )
 
 
-ALLOWED_TOOL_NAMES = {"get_canvas_state", "exec_geogebra_commands", "eval_expression", "eval_numeric", "delete_objects"}
+from .tool_registry import SUPPORTED_TOOL_NAMES
+
+ALLOWED_TOOL_NAMES = set(SUPPORTED_TOOL_NAMES)
 
 
 class ActDecision(BaseModel):
@@ -911,44 +913,34 @@ def _compose_prompt_parts(parts: list[str]) -> str:
     return "\n\n---\n\n".join(cleaned)
 
 
-def _format_memory_context(
+def _build_context_messages(
     *,
     memory_summary: str | None,
     recent_messages: list[dict[str, Any]] | None,
-    max_chars: int = 1600,
-) -> str:
-    lines: list[str] = []
+) -> list[Any]:
+    out: list[Any] = []
+    
+    # 1. Summary as a distinct message (System) to allow caching
     summary = (memory_summary or "").strip()
     if summary:
-        lines.append("conversation_summary:")
-        lines.append(summary)
+        out.append(SystemMessage(content=f"Conversation Summary:\n{summary}"))
 
+    # 2. Unroll recent history
     if recent_messages:
-        items: list[str] = []
-        for m in recent_messages[-16:]:
+        for m in recent_messages:
             if not isinstance(m, dict):
                 continue
             role = m.get("role")
             text = m.get("text")
-            if role not in {"user", "assistant"}:
+            if not isinstance(text, str) or not text.strip():
                 continue
-            if not isinstance(text, str):
-                continue
-            t = text.strip()
-            if not t:
-                continue
-            t = t if len(t) <= 400 else (t[:400] + "…")
-            items.append(f"{role}: {t}")
-        if items:
-            lines.append("recent_messages:")
-            lines.extend(items)
-
-    blob = "\n".join(lines).strip()
-    if not blob:
-        return ""
-    if len(blob) <= max_chars:
-        return blob
-    return blob[:max_chars] + "…"
+            
+            if role == "user":
+                out.append(HumanMessage(content=text.strip()))
+            elif role == "assistant":
+                out.append(AIMessage(content=text.strip()))
+                
+    return out
 
 
 def _clean_commands(commands: list[Any]) -> list[str]:
@@ -1011,7 +1003,9 @@ def generate_geogebra_commands(
     action_ledger = _compact_action_ledger(tool_results)
     object_provenance = _build_object_provenance(canvas_objects=canvas_objects, action_ledger=action_ledger)
     canvas_diff = _extract_canvas_diff(tool_results)
-    memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
+    
+    # Context Caching: unroll history
+    context_msgs = _build_context_messages(memory_summary=memory_summary, recent_messages=recent_messages)
 
     system_parts: list[str] = [
         _load_prompt_asset("prompts/v2/command_gen_system.md"),
@@ -1028,7 +1022,6 @@ def generate_geogebra_commands(
     human = HumanMessage(
         content=(
             f"user_text: {user_text}\n"
-            + (f"{memory_ctx}\n" if memory_ctx else "")
             + f"tool_calls_used: {tool_calls_used}\n"
             + f"tool_calls_limit: {tool_calls_limit}\n"
             + f"remaining_tool_calls: {remaining}\n"
@@ -1090,7 +1083,7 @@ def generate_geogebra_commands(
             cfg=cfg,
             op="command_gen",
             role=role,
-            messages=[system, human],
+            messages=[system] + context_msgs + [human],
             run_id=run_id,
             ui_debug=ui_debug,
             send_tokens=bool(ui_debug),
@@ -1141,14 +1134,15 @@ def generate_final_answer(
     action_ledger = _compact_action_ledger(tool_results)
     object_provenance = _build_object_provenance(canvas_objects=canvas_objects, action_ledger=action_ledger)
     canvas_diff = _extract_canvas_diff(tool_results)
-    memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
+    
+    # Context Caching: unroll history
+    context_msgs = _build_context_messages(memory_summary=memory_summary, recent_messages=recent_messages)
 
     system = SystemMessage(content=_load_prompt_asset("prompts/v2/final_system.md"))
 
     human = HumanMessage(
         content=(
             f"user_text: {user_text}\n"
-            + (f"{memory_ctx}\n" if memory_ctx else "")
             + f"tool_calls_used: {tool_calls_used}\n"
             + f"tool_calls_limit: {tool_calls_limit}\n"
             + f"executed_commands (latest, up to 30): {executed_commands}\n"
@@ -1190,7 +1184,7 @@ def generate_final_answer(
             cfg=cfg,
             op="final",
             role=role,
-            messages=[system, human],
+            messages=[system] + context_msgs + [human],
             run_id=run_id,
             ui_debug=ui_debug,
             send_tokens=bool(ui_debug),
@@ -1272,7 +1266,9 @@ def decide_next_step(
     canvas_diff = _extract_canvas_diff(tool_results)
     diagnostics = canvas_diagnostics or {}
     repair_hint_text = (repair_hint or "").strip()
-    memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
+    
+    # Context Caching: unroll history
+    context_msgs = _build_context_messages(memory_summary=memory_summary, recent_messages=recent_messages)
 
     system_text = _load_prompt_asset("prompts/v2/act_system.md")
     system = SystemMessage(content=(system_text + f"\n\nRemaining tool calls in this run: {remaining}").strip())
@@ -1280,7 +1276,6 @@ def decide_next_step(
     human = HumanMessage(
         content=(
             f"user_text: {user_text}\n"
-            + (f"{memory_ctx}\n" if memory_ctx else "")
             + f"tool_calls_used: {tool_calls_used}\n"
             + f"tool_calls_limit: {tool_calls_limit}\n"
                 f"canvas_objects (latest, up to 30): {canvas_objects}\n"
@@ -1325,7 +1320,7 @@ def decide_next_step(
             )
         )
         try:
-            msg = llm.invoke([system, json_human])
+            msg = llm.invoke([system] + context_msgs + [json_human])
         except Exception:
             return None
 
@@ -1347,7 +1342,7 @@ def decide_next_step(
         except Exception:
             return None
 
-    decision = invoke_structured([system, human]) or invoke_json_fallback()
+    decision = invoke_structured([system] + context_msgs + [human]) or invoke_json_fallback()
     if decision is None:
         return None
 
@@ -1418,13 +1413,15 @@ def generate_plan(
     object_type_counts = _count_canvas_object_types(raw_objects)
     action_ledger = _compact_action_ledger(tool_results)
     canvas_diff = _extract_canvas_diff(tool_results)
-    memory_ctx = _format_memory_context(memory_summary=memory_summary, recent_messages=recent_messages)
+    
+    # Context Caching: unroll history
+    context_msgs = _build_context_messages(memory_summary=memory_summary, recent_messages=recent_messages)
+
     system_text = _load_prompt_asset("prompts/v2/plan_system.md")
     system = SystemMessage(content=system_text)
     human = HumanMessage(
         content=(
             f"user_text: {user_text}\n"
-            + (f"{memory_ctx}\n" if memory_ctx else "")
             + "available_tools (high-level):\n"
             + "- get_canvas_state: inspect current canvas objects\n"
             + "- exec_geogebra_commands: create/modify objects on the canvas\n"
@@ -1441,7 +1438,7 @@ def generate_plan(
         cfg=cfg,
         op="plan",
         role="main",
-        messages=[system, human],
+        messages=[system] + context_msgs + [human],
         run_id=run_id,
         ui_debug=ui_debug,
         send_tokens=bool(ui_debug),
