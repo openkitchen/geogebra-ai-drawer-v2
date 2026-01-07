@@ -136,7 +136,7 @@ bd sync               # Commit and push changes
 Examples (issue id):
 - `geogebra-ai-drawer-v2-ciy`
 - `geogebra-ai-drawer-v2-dh7`
-- `bd-123`
+- `geogebra-ai-drawer-v2-0c7`
 
 Required flow:
 1. `bd show <id>` to confirm it exists and read full context
