@@ -7,7 +7,7 @@
 - **多个 agent**：用 `BD_ACTOR=<agent_name>` 区分身份；用 `bd --actor <agent_name>` 也行。
 
 ## 任务认领与看板（bd）
-- 单一任务源：`bd` issues。
+- 单一任务源：`bd` issues（`docs/tasks/*.md` 已废弃移除）。
 - 开工前：`bd update <id> --status in_progress` + `--assignee <agent_name>`。
 - 阻塞：`bd update <id> --status blocked --notes "...blocker..."`。
 - 完成：`bd close <id> --reason "..."`（并把验证命令/结果写进 notes）。

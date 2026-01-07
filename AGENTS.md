@@ -47,6 +47,7 @@
 
 ## 并行开发流程
 - 任务系统：使用 **bd（beads）** 作为唯一任务源（团队模式：`.beads/issues.jsonl` 进 git；收尾必须 `bd sync`）。
+- **Legacy Removal**: `docs/tasks/backlog.md` and `docs/tasks/roadmap.md` are deprecated and removed. All tasks are tracked in beads.
 - 多 agent 身份：每个 agent/终端建议设置 `BD_ACTOR=<agent_name>`；任务用 `--assignee <agent_name>` 归属。
 - 并行改代码：建议每个 agent 使用独立 worktree 目录（避免互相覆盖/冲突），用 `bd worktree create` 管理。
 - 决策记录：高影响决策写入 `docs/collaboration/decision-log.md`；对应落地任务写入 bd。
