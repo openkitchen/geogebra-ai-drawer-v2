@@ -30,6 +30,22 @@ export default function App() {
   const [devMode, setDevMode] = useState(false);
   const [debugDrawerOpen, setDebugDrawerOpen] = useState(false);
 
+  const lastAssistantMessage = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m.role === 'assistant') return m;
+    }
+    return null;
+  })();
+
+  const resumeOverlay = (() => {
+    if (!lastAssistantMessage || lastAssistantMessage.role !== 'assistant') return null;
+    const o = lastAssistantMessage.overlay;
+    if (!o || typeof o !== 'object') return null;
+    const kind = (o as any).kind;
+    return kind === 'resume_available' ? (o as Record<string, unknown>) : null;
+  })();
+
   const forceHardMode = (() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -174,7 +190,7 @@ export default function App() {
             if (m.id !== assistantId || m.role !== 'assistant') return m;
             const nextEvents = [...m.events, ev];
             if (ev.event === 'final') {
-              return { ...m, events: nextEvents, text: ev.data.answer.explanation };
+              return { ...m, events: nextEvents, text: ev.data.answer.explanation, overlay: ev.data.answer.overlay_text ?? null };
             }
             if (ev.event === 'token') {
               const channel = ev.data.channel ?? 'meta';
@@ -433,6 +449,21 @@ export default function App() {
                  onKeyDown={handleKeyDown}
                  rows={1}
                />
+              {resumeOverlay ? (
+                <button
+                  type="button"
+                  className="secondary"
+                  data-testid="resume-button"
+                  disabled={!ggbApi || busy}
+                  title="Continue generation"
+                  onClick={() => {
+                    const wantsDraw = typeof (resumeOverlay as any).wants_draw === 'boolean' ? (resumeOverlay as any).wants_draw : true;
+                    void send('继续', { continue_generation: true, wants_draw: wantsDraw });
+                  }}
+                >
+                  继续
+                </button>
+              ) : null}
                <button 
                  type="submit"
                  className="send-btn" 

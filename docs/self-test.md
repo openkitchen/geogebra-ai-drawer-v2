@@ -23,6 +23,13 @@
 - 发送一条消息（例如“画一个圆”）
 - 期望：画板出现目标图形；Debug/Timeline 能看到 `interrupt → resume → tool_end → final → run_end` 的完整链路
 
+（可选）验证“继续生成/继续作图”（中断续写）：
+- 临时把 LLM 超时设得很小并重启（例如：`export V2_LLM_TIMEOUT_S=1 && ./scripts/v2_dev.sh`）
+- 发送一条需要生成较长输出的消息（例如“画一个圆并解释步骤”）
+- 期望：若出现中断，assistant 最终会提示“生成被中断”，并出现一个明确的 `继续` 按钮
+- 点击 `继续`
+- 期望：系统能基于上次 partial 内容继续生成（不把“继续”当成新任务），并最终完成 `final → run_end`
+
 > 可选（推荐给自动化/CI/agent）：用 Playwright 自动化完成同一条主路径验收（会启动本地 web+api、跑一次“画一个圆”、并在 `logs/acceptance/` 生成截图证据）：
 ```bash
 npm run acceptance:v2:web

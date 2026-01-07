@@ -60,6 +60,47 @@ def _emit_phase_update(
     return {"phase_seq": seq, "phase_update": payload}
 
 
+def _merge_resume_text(prefix: str, continuation: str) -> str:
+    """Merge a partial prefix with a resumed continuation, trimming common overlaps."""
+
+    a = (prefix or "").strip()
+    b = (continuation or "").strip()
+    if not a:
+        return b
+    if not b:
+        return a
+    if b.startswith(a):
+        return b
+
+    max_k = min(len(a), len(b), 400)
+    for k in range(max_k, 40, -1):
+        if a[-k:] == b[:k]:
+            return a + b[k:]
+
+    return a + "\n" + b
+
+
+def _store_partial_output(*, op: str, role: str, text: str, error: Any, prompt_sha256: str | None) -> dict[str, Any]:
+    max_chars = read_int_env("V2_RESUME_MAX_CHARS", 20000, min_value=2000, max_value=200000)
+    return {
+        "last_partial_text": (text or "").strip()[:max_chars],
+        "last_partial_op": op,
+        "last_partial_role": role,
+        "last_prompt_sha256": (prompt_sha256 or "").strip(),
+        "last_llm_error": {"op": op, "role": role, "error": error},
+    }
+
+
+def _clear_partial_output() -> dict[str, Any]:
+    return {
+        "last_partial_text": "",
+        "last_partial_op": "",
+        "last_partial_role": "",
+        "last_prompt_sha256": "",
+        "last_llm_error": {},
+    }
+
+
 def ingest_node(state: GraphState) -> dict:
     user_text = (state.get("user_text") or "").strip()
     run_id = state.get("run_id")
@@ -72,8 +113,12 @@ def ingest_node(state: GraphState) -> dict:
     max_messages = read_int_env("V2_MEMORY_MAX_MESSAGES", 60, min_value=4, max_value=120)
     keep_last = read_int_env("V2_MEMORY_KEEP_LAST", 40, min_value=2, max_value=max_messages)
 
+    hint = state.get("intent_hint")
+    hint_dict: dict[str, Any] = hint if isinstance(hint, dict) else {}
+    resume_generation = bool(hint_dict.get("continue_generation")) if hint_dict else False
+
     memory_messages = compact_memory_messages(state.get("memory_messages"))
-    if user_text:
+    if user_text and not resume_generation:
         memory_messages.append({"role": "user", "text": user_text[:2000]})
 
     memory_summary = (state.get("memory_summary") or "").strip()
@@ -93,12 +138,34 @@ def ingest_node(state: GraphState) -> dict:
                 memory_summary = summary.strip()
         memory_messages = keep
 
+    # Determine stable task text: do NOT let "continue" overwrite the original request.
+    task_user_text = (state.get("task_user_text") or "").strip()
+    if resume_generation:
+        if not task_user_text:
+            for m in reversed(memory_messages):
+                if not isinstance(m, dict) or m.get("role") != "user":
+                    continue
+                t = m.get("text")
+                if isinstance(t, str) and t.strip():
+                    task_user_text = t.strip()
+                    break
+        if not task_user_text:
+            task_user_text = user_text
+    else:
+        task_user_text = user_text
+
     # Intent sources (strict): UI structured hint or LLM intent-classifier.
     # Do NOT add heuristic/keyword parsing here.
     intent: dict[str, Any] = {}
-    hint = state.get("intent_hint")
-    if isinstance(hint, dict) and hint:
-        intent = {k: v for k, v in hint.items() if isinstance(k, str)}
+    if hint_dict:
+        intent = {k: v for k, v in hint_dict.items() if isinstance(k, str)}
+        # For resume flows, allow carrying forward missing core flags (still deterministic; no parsing).
+        if resume_generation:
+            prev_intent = state.get("intent")
+            prev_dict: dict[str, Any] = prev_intent if isinstance(prev_intent, dict) else {}
+            for k in ("wants_draw", "forbids_drawing"):
+                if k not in intent and k in prev_dict:
+                    intent[k] = prev_dict.get(k)
     else:
         can_use_llm = load_llm_config(role=os.getenv("V2_LLM_INTENT_ROLE") or "fast") is not None
         if user_text and can_use_llm and model_calls_used < model_calls_limit:
@@ -123,15 +190,26 @@ def ingest_node(state: GraphState) -> dict:
     # Allow UI hint to override difficulty only if explicitly provided.
     # (This is still "structured hint", not heuristic parsing.)
     hinted_difficulty = None
-    if isinstance(hint, dict) and hint:
-        raw = hint.get("difficulty")
+    if hint_dict:
+        raw = hint_dict.get("difficulty")
         if isinstance(raw, str) and raw.strip().lower() in {"simple", "hard"}:
             hinted_difficulty = raw.strip().lower()
+
+    prev_difficulty = None
+    if resume_generation:
+        raw_prev = state.get("difficulty")
+        if isinstance(raw_prev, str) and raw_prev.strip().lower() in {"simple", "hard"}:
+            prev_difficulty = raw_prev.strip().lower()
 
     if hinted_difficulty is not None:
         difficulty = hinted_difficulty
         hard_mode = difficulty == "hard"
         difficulty_reasons = ["UI hint"]
+        difficulty_confidence = 0.9
+    elif prev_difficulty is not None:
+        difficulty = prev_difficulty
+        hard_mode = difficulty == "hard"
+        difficulty_reasons = ["Resume: keep previous difficulty"]
         difficulty_confidence = 0.9
     else:
         if not user_text:
@@ -164,39 +242,67 @@ def ingest_node(state: GraphState) -> dict:
     # Auto-enable plan mode when hard-mode is selected (simple mode stays direct).
     plan_mode = bool(state.get("plan_mode")) or hard_mode
 
-    # Reset per-run ephemeral state so a new user turn starts cleanly.
-    return {
-        "did_draw": False,
-        "needs_canvas_refresh": False,
-        "regen_needed": False,
-        "attempt": 0,
-        "max_attempts": max_attempts,
-        "repair_feedback": "",
-        "pending_delete_objects": [],
-        "give_up_after_cleanup": False,
-        "last_exec_created_objects": [],
-        "last_exec_had_failure": False,
-        "last_exec_dialogs": [],
-        "last_exec_rolled_back_objects": [],
-        "last_verify_issues": [],
-        "pending_numeric_eval": {},
-        "measured_triangle_kinds": {},
-        "numeric_verified": False,
+    base_updates = {
         "intent": intent,
         "difficulty": difficulty or "simple",
         "difficulty_reasons": difficulty_reasons,
         "difficulty_confidence": difficulty_confidence if difficulty_confidence is not None else 0.6,
         "hard_mode": hard_mode,
-        "phase_seq": 0,
-        "phase_update": {},
         "fatal_error": fatal_error,
         "plan_mode": plan_mode,
-        "plan_generated": False,
         "memory_messages": memory_messages,
         "memory_summary": memory_summary,
         "model_calls_used": model_calls_used,
         "model_calls_limit": model_calls_limit,
+        "task_user_text": task_user_text,
+        "resume_generation": resume_generation,
+        # Clear any per-run memory append, so finalize_node won't duplicate across runs.
+        "memory_append_assistant_text": "",
+        # Clear answer overlay by default; it is set only when returning a final answer.
+        "answer_overlay": {},
     }
+
+    if resume_generation:
+        # IMPORTANT: do NOT reset draw-loop state on resume; we want to continue from previous progress.
+        base_updates.update(
+            {
+                "phase_seq": 0,
+                "phase_update": {},
+            }
+        )
+        return base_updates
+
+    # Reset per-run ephemeral state so a new user turn starts cleanly.
+    base_updates.update(
+        {
+            "did_draw": False,
+            "needs_canvas_refresh": False,
+            "regen_needed": False,
+            "attempt": 0,
+            "max_attempts": max_attempts,
+            "repair_feedback": "",
+            "pending_delete_objects": [],
+            "give_up_after_cleanup": False,
+            "last_exec_created_objects": [],
+            "last_exec_had_failure": False,
+            "last_exec_dialogs": [],
+            "last_exec_rolled_back_objects": [],
+            "last_verify_issues": [],
+            "pending_numeric_eval": {},
+            "measured_triangle_kinds": {},
+            "numeric_verified": False,
+            "phase_seq": 0,
+            "phase_update": {},
+            "plan_generated": False,
+            # Clear resume artifacts on a fresh user request.
+            "last_partial_text": "",
+            "last_partial_op": "",
+            "last_partial_role": "",
+            "last_prompt_sha256": "",
+            "last_llm_error": {},
+        }
+    )
+    return base_updates
 
 
 def plan_node(state: GraphState) -> dict:
@@ -204,8 +310,8 @@ def plan_node(state: GraphState) -> dict:
     if not plan_mode:
         return {"plan": []}
 
-    user_text = (state.get("user_text") or "").strip()
-    if not user_text:
+    task_user_text = (state.get("task_user_text") or state.get("user_text") or "").strip()
+    if not task_user_text:
         return {"plan": []}
 
     if state.get("plan_generated") is True:
@@ -229,16 +335,36 @@ def plan_node(state: GraphState) -> dict:
         }
 
     model_calls_used += 1
-    steps = generate_plan(
-        user_text=user_text,
+
+    resume_from = None
+    if state.get("resume_generation") is True and state.get("last_partial_op") == "plan":
+        prev = state.get("last_partial_text")
+        if isinstance(prev, str) and prev.strip():
+            resume_from = prev.strip()
+
+    result = generate_plan(
+        user_text=task_user_text,
         memory_summary=state.get("memory_summary") or None,
         recent_messages=state.get("memory_messages") or None,
         tool_results=state.get("tool_results") or None,
+        resume_from=resume_from,
         run_id=run_id,
         ui_debug=ui_debug,
     )
+    steps = result.steps
     if not steps:
-        return {"plan": [], "model_calls_used": model_calls_used, "model_calls_limit": model_calls_limit}
+        updates: dict[str, Any] = {"plan": [], "model_calls_used": model_calls_used, "model_calls_limit": model_calls_limit}
+        if result.stream.completed is False and isinstance(result.stream.text, str) and result.stream.text.strip():
+            updates.update(
+                _store_partial_output(
+                    op="plan",
+                    role=result.stream.role,
+                    text=result.stream.text,
+                    error=result.stream.error,
+                    prompt_sha256=result.stream.prompt_sha256,
+                )
+            )
+        return updates
 
     plan = [{"id": f"p{i+1}", "text": s, "done": False} for i, s in enumerate(steps[:8]) if isinstance(s, str) and s.strip()]
 
@@ -255,13 +381,16 @@ def plan_node(state: GraphState) -> dict:
             next_step=(top_steps or "开始读取画板状态，然后按计划构造。"),
         )
 
-    return {
+    updates: dict[str, Any] = {
         **phase,
         "plan": plan,
         "plan_generated": True,
         "model_calls_used": model_calls_used,
         "model_calls_limit": model_calls_limit,
     }
+    if state.get("last_partial_op") == "plan":
+        updates.update(_clear_partial_output())
+    return updates
 
 
 def act_node(state: GraphState) -> dict:
@@ -271,7 +400,11 @@ def act_node(state: GraphState) -> dict:
     model_calls_limit = int(state.get("model_calls_limit", 6))
     run_id = state.get("run_id")
     ui_debug = bool(state.get("ui_debug"))
-    user_text = state.get("user_text") or ""
+    user_text_raw = state.get("user_text") or ""
+    task_user_text = (state.get("task_user_text") or user_text_raw).strip()
+    resume_generation = state.get("resume_generation") is True
+    last_partial_op = state.get("last_partial_op") if isinstance(state.get("last_partial_op"), str) else ""
+    last_partial_text = state.get("last_partial_text") if isinstance(state.get("last_partial_text"), str) else ""
     remaining = max(0, tool_calls_limit - tool_calls_used)
     attempt = int(state.get("attempt", 0))
     max_attempts = int(state.get("max_attempts", 2))
@@ -352,17 +485,45 @@ def act_node(state: GraphState) -> dict:
                 can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
                 if can_use_llm:
                     model_calls_used += 1
-                    answer = generate_final_answer(
-                        user_text=user_text,
+                    resume_from = last_partial_text.strip() if (resume_generation and last_partial_op == "final" and last_partial_text.strip()) else None
+                    result = generate_final_answer(
+                        user_text=task_user_text,
                         tool_calls_used=tool_calls_used,
                         tool_calls_limit=tool_calls_limit,
                         tool_results=state.get("tool_results"),
                         memory_summary=state.get("memory_summary") or None,
                         recent_messages=state.get("memory_messages") or None,
+                        resume_from=resume_from,
                         run_id=run_id,
                         ui_debug=ui_debug,
                     )
-                    if answer:
+                    if result.stream.completed is False and isinstance(result.stream.text, str) and result.stream.text.strip():
+                        merged = _merge_resume_text(resume_from or "", result.stream.text)
+                        return {
+                            **_emit_phase_update(
+                                state,
+                                "Finalize",
+                                summary="讲解生成中断，但已保留部分内容。",
+                                result="Interrupted",
+                                next_step="你可以点击“继续生成/继续作图”来接着完成。",
+                            ),
+                            "next_step_kind": "final",
+                            "answer_text": merged + "\n\n（生成被中断）你可以点击“继续生成/继续作图”来接着完成。",
+                            "memory_append_assistant_text": merged,
+                            "answer_overlay": {"kind": "resume_available", "action": "continue_generation", "op": "final", "wants_draw": False},
+                            **_store_partial_output(
+                                op="final",
+                                role=result.stream.role,
+                                text=merged,
+                                error=result.stream.error,
+                                prompt_sha256=result.stream.prompt_sha256,
+                            ),
+                            "model_calls_used": model_calls_used,
+                            "model_calls_limit": model_calls_limit,
+                        }
+
+                    if isinstance(result.text, str) and result.text.strip():
+                        answer_text = _merge_resume_text(resume_from or "", result.text)
                         return {
                             **_emit_phase_update(
                                 state,
@@ -372,7 +533,10 @@ def act_node(state: GraphState) -> dict:
                                 next_step="",
                             ),
                             "next_step_kind": "final",
-                            "answer_text": answer,
+                            "answer_text": answer_text,
+                            "memory_append_assistant_text": answer_text,
+                            "answer_overlay": {},
+                            **_clear_partial_output(),
                             "model_calls_used": model_calls_used,
                             "model_calls_limit": model_calls_limit,
                         }
@@ -408,17 +572,45 @@ def act_node(state: GraphState) -> dict:
         can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
         if can_use_llm:
             model_calls_used += 1
-            answer = generate_final_answer(
-                user_text=user_text,
+            resume_from = last_partial_text.strip() if (resume_generation and last_partial_op == "final" and last_partial_text.strip()) else None
+            result = generate_final_answer(
+                user_text=task_user_text,
                 tool_calls_used=tool_calls_used,
                 tool_calls_limit=tool_calls_limit,
                 tool_results=state.get("tool_results"),
                 memory_summary=state.get("memory_summary") or None,
                 recent_messages=state.get("memory_messages") or None,
+                resume_from=resume_from,
                 run_id=run_id,
                 ui_debug=ui_debug,
             )
-            if answer:
+            if result.stream.completed is False and isinstance(result.stream.text, str) and result.stream.text.strip():
+                merged = _merge_resume_text(resume_from or "", result.stream.text)
+                return {
+                    **_emit_phase_update(
+                        state,
+                        "Finalize",
+                        summary="回答生成中断，但已保留部分内容。",
+                        result="Interrupted",
+                        next_step="你可以点击“继续生成/继续作图”来接着完成。",
+                    ),
+                    "next_step_kind": "final",
+                    "answer_text": merged + "\n\n（生成被中断）你可以点击“继续生成/继续作图”来接着完成。",
+                    "memory_append_assistant_text": merged,
+                    "answer_overlay": {"kind": "resume_available", "action": "continue_generation", "op": "final", "wants_draw": False},
+                    **_store_partial_output(
+                        op="final",
+                        role=result.stream.role,
+                        text=merged,
+                        error=result.stream.error,
+                        prompt_sha256=result.stream.prompt_sha256,
+                    ),
+                    "model_calls_used": model_calls_used,
+                    "model_calls_limit": model_calls_limit,
+                }
+
+            if isinstance(result.text, str) and result.text.strip():
+                answer_text = _merge_resume_text(resume_from or "", result.text)
                 return {
                     **_emit_phase_update(
                         state,
@@ -428,7 +620,10 @@ def act_node(state: GraphState) -> dict:
                         next_step="",
                     ),
                     "next_step_kind": "final",
-                    "answer_text": answer,
+                    "answer_text": answer_text,
+                    "memory_append_assistant_text": answer_text,
+                    "answer_overlay": {},
+                    **_clear_partial_output(),
                     "model_calls_used": model_calls_used,
                     "model_calls_limit": model_calls_limit,
                 }
@@ -542,17 +737,45 @@ def act_node(state: GraphState) -> dict:
         can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
         if can_use_llm:
             model_calls_used += 1
-            answer = generate_final_answer(
-                user_text=user_text,
+            resume_from = last_partial_text.strip() if (resume_generation and last_partial_op == "final" and last_partial_text.strip()) else None
+            result = generate_final_answer(
+                user_text=task_user_text,
                 tool_calls_used=tool_calls_used,
                 tool_calls_limit=tool_calls_limit,
                 tool_results=state.get("tool_results"),
                 memory_summary=state.get("memory_summary") or None,
                 recent_messages=state.get("memory_messages") or None,
+                resume_from=resume_from,
                 run_id=run_id,
                 ui_debug=ui_debug,
             )
-            if answer:
+            if result.stream.completed is False and isinstance(result.stream.text, str) and result.stream.text.strip():
+                merged = _merge_resume_text(resume_from or "", result.stream.text)
+                return {
+                    **_emit_phase_update(
+                        state,
+                        "Finalize",
+                        summary="回答生成中断，但已保留部分内容。",
+                        result="Interrupted",
+                        next_step="你可以点击“继续生成/继续作图”来接着完成。",
+                    ),
+                    "next_step_kind": "final",
+                    "answer_text": merged + "\n\n（生成被中断）你可以点击“继续生成/继续作图”来接着完成。",
+                    "memory_append_assistant_text": merged,
+                    "answer_overlay": {"kind": "resume_available", "action": "continue_generation", "op": "final", "wants_draw": False},
+                    **_store_partial_output(
+                        op="final",
+                        role=result.stream.role,
+                        text=merged,
+                        error=result.stream.error,
+                        prompt_sha256=result.stream.prompt_sha256,
+                    ),
+                    "model_calls_used": model_calls_used,
+                    "model_calls_limit": model_calls_limit,
+                }
+
+            if isinstance(result.text, str) and result.text.strip():
+                answer_text = _merge_resume_text(resume_from or "", result.text)
                 return {
                     **_emit_phase_update(
                         state,
@@ -562,7 +785,10 @@ def act_node(state: GraphState) -> dict:
                         next_step="",
                     ),
                     "next_step_kind": "final",
-                    "answer_text": answer,
+                    "answer_text": answer_text,
+                    "memory_append_assistant_text": answer_text,
+                    "answer_overlay": {},
+                    **_clear_partial_output(),
                     "model_calls_used": model_calls_used,
                     "model_calls_limit": model_calls_limit,
                 }
@@ -586,18 +812,24 @@ def act_node(state: GraphState) -> dict:
         can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
         if can_use_llm:
             model_calls_used += 1
-            commands = generate_geogebra_commands(
-                user_text=user_text,
+            resume_from = (
+                last_partial_text.strip()
+                if (resume_generation and last_partial_op == "command_gen" and last_partial_text.strip())
+                else None
+            )
+            cmd_result = generate_geogebra_commands(
+                user_text=task_user_text,
                 tool_calls_used=tool_calls_used,
                 tool_calls_limit=tool_calls_limit,
                 tool_results=state.get("tool_results"),
                 runtime_feedback=state.get("repair_feedback") or None,
                 memory_summary=state.get("memory_summary") or None,
                 recent_messages=state.get("memory_messages") or None,
+                resume_from=resume_from,
                 run_id=run_id,
                 ui_debug=ui_debug,
             )
-            if commands:
+            if cmd_result.commands:
                 return {
                     **_emit_phase_update(
                         state,
@@ -615,7 +847,36 @@ def act_node(state: GraphState) -> dict:
                     "next_step_kind": "tool",
                     "next_tool_name": "exec_geogebra_commands",
                     "next_tool_call_id": str(uuid.uuid4()),
-                    "next_tool_input": {"commands": commands},
+                    "next_tool_input": {"commands": cmd_result.commands},
+                    "answer_overlay": {},
+                    **(_clear_partial_output() if last_partial_op == "command_gen" else {}),
+                    "model_calls_used": model_calls_used,
+                    "model_calls_limit": model_calls_limit,
+                }
+
+            if (
+                cmd_result.stream.completed is False
+                and isinstance(cmd_result.stream.text, str)
+                and cmd_result.stream.text.strip()
+            ):
+                return {
+                    **_emit_phase_update(
+                        state,
+                        "Revise",
+                        summary="修复版作图步骤生成中断。",
+                        result="Interrupted",
+                        next_step="你可以点击“继续生成/继续作图”来接着生成作图步骤。",
+                    ),
+                    "next_step_kind": "final",
+                    "answer_text": "修复作图步骤生成被中断了。你可以点击“继续生成/继续作图”，我会接着把修复版作图步骤生成出来并继续作图。",
+                    "answer_overlay": {"kind": "resume_available", "action": "continue_generation", "op": "command_gen", "wants_draw": True},
+                    **_store_partial_output(
+                        op="command_gen",
+                        role=cmd_result.stream.role,
+                        text=cmd_result.stream.text,
+                        error=cmd_result.stream.error,
+                        prompt_sha256=cmd_result.stream.prompt_sha256,
+                    ),
                     "model_calls_used": model_calls_used,
                     "model_calls_limit": model_calls_limit,
                 }
@@ -640,18 +901,24 @@ def act_node(state: GraphState) -> dict:
             can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
             if can_use_llm:
                 model_calls_used += 1
-                commands = generate_geogebra_commands(
-                    user_text=user_text,
+                resume_from = (
+                    last_partial_text.strip()
+                    if (resume_generation and last_partial_op == "command_gen" and last_partial_text.strip())
+                    else None
+                )
+                cmd_result = generate_geogebra_commands(
+                    user_text=task_user_text,
                     tool_calls_used=tool_calls_used,
                     tool_calls_limit=tool_calls_limit,
                     tool_results=state.get("tool_results"),
                     runtime_feedback=None,
                     memory_summary=state.get("memory_summary") or None,
                     recent_messages=state.get("memory_messages") or None,
+                    resume_from=resume_from,
                     run_id=run_id,
                     ui_debug=ui_debug,
                 )
-                if commands:
+                if cmd_result.commands:
                     return {
                         **_emit_phase_update(
                             state,
@@ -667,7 +934,36 @@ def act_node(state: GraphState) -> dict:
                         "next_step_kind": "tool",
                         "next_tool_name": "exec_geogebra_commands",
                         "next_tool_call_id": str(uuid.uuid4()),
-                        "next_tool_input": {"commands": commands},
+                        "next_tool_input": {"commands": cmd_result.commands},
+                        "answer_overlay": {},
+                        **(_clear_partial_output() if last_partial_op == "command_gen" else {}),
+                        "model_calls_used": model_calls_used,
+                        "model_calls_limit": model_calls_limit,
+                    }
+
+                if (
+                    cmd_result.stream.completed is False
+                    and isinstance(cmd_result.stream.text, str)
+                    and cmd_result.stream.text.strip()
+                ):
+                    return {
+                        **_emit_phase_update(
+                            state,
+                            "Act",
+                            summary="作图步骤生成中断。",
+                            result="Interrupted",
+                            next_step="你可以点击“继续生成/继续作图”来接着生成作图步骤。",
+                        ),
+                        "next_step_kind": "final",
+                        "answer_text": "作图步骤生成被中断了。你可以点击“继续生成/继续作图”，我会接着把作图步骤生成出来并继续作图。",
+                        "answer_overlay": {"kind": "resume_available", "action": "continue_generation", "op": "command_gen", "wants_draw": True},
+                        **_store_partial_output(
+                            op="command_gen",
+                            role=cmd_result.stream.role,
+                            text=cmd_result.stream.text,
+                            error=cmd_result.stream.error,
+                            prompt_sha256=cmd_result.stream.prompt_sha256,
+                        ),
                         "model_calls_used": model_calls_used,
                         "model_calls_limit": model_calls_limit,
                     }
@@ -707,17 +1003,46 @@ def act_node(state: GraphState) -> dict:
             can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
             if can_use_llm:
                 model_calls_used += 1
-                answer = generate_final_answer(
-                    user_text=user_text,
+                resume_from = last_partial_text.strip() if (resume_generation and last_partial_op == "final" and last_partial_text.strip()) else None
+                result = generate_final_answer(
+                    user_text=task_user_text,
                     tool_calls_used=tool_calls_used,
                     tool_calls_limit=tool_calls_limit,
                     tool_results=state.get("tool_results"),
                     memory_summary=state.get("memory_summary") or None,
                     recent_messages=state.get("memory_messages") or None,
+                    resume_from=resume_from,
                     run_id=run_id,
                     ui_debug=ui_debug,
                 )
-                if answer:
+                if result.stream.completed is False and isinstance(result.stream.text, str) and result.stream.text.strip():
+                    merged = _merge_resume_text(resume_from or "", result.stream.text)
+                    return {
+                        **_emit_phase_update(
+                            state,
+                            "Verify",
+                            summary="讲解生成中断，但已保留部分内容。",
+                            result="Interrupted",
+                            next_step="你可以点击“继续生成/继续作图”来接着完成。",
+                        ),
+                        "last_verify_issues": [],
+                        "next_step_kind": "final",
+                        "answer_text": merged + "\n\n（生成被中断）你可以点击“继续生成/继续作图”来接着完成。",
+                        "memory_append_assistant_text": merged,
+                        "answer_overlay": {"kind": "resume_available", "action": "continue_generation", "op": "final", "wants_draw": False},
+                        **_store_partial_output(
+                            op="final",
+                            role=result.stream.role,
+                            text=merged,
+                            error=result.stream.error,
+                            prompt_sha256=result.stream.prompt_sha256,
+                        ),
+                        "model_calls_used": model_calls_used,
+                        "model_calls_limit": model_calls_limit,
+                    }
+
+                if isinstance(result.text, str) and result.text.strip():
+                    answer_text = _merge_resume_text(resume_from or "", result.text)
                     return {
                         **_emit_phase_update(
                             state,
@@ -728,7 +1053,10 @@ def act_node(state: GraphState) -> dict:
                         ),
                         "last_verify_issues": [],
                         "next_step_kind": "final",
-                        "answer_text": answer,
+                        "answer_text": answer_text,
+                        "memory_append_assistant_text": answer_text,
+                        "answer_overlay": {},
+                        **_clear_partial_output(),
                         "model_calls_used": model_calls_used,
                         "model_calls_limit": model_calls_limit,
                     }
@@ -809,18 +1137,24 @@ def act_node(state: GraphState) -> dict:
             can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
             if can_use_llm:
                 model_calls_used += 1
-                commands = generate_geogebra_commands(
-                    user_text=user_text,
+                resume_from = (
+                    last_partial_text.strip()
+                    if (resume_generation and last_partial_op == "command_gen" and last_partial_text.strip())
+                    else None
+                )
+                cmd_result = generate_geogebra_commands(
+                    user_text=task_user_text,
                     tool_calls_used=tool_calls_used,
                     tool_calls_limit=tool_calls_limit,
                     tool_results=state.get("tool_results"),
                     runtime_feedback=feedback,
                     memory_summary=state.get("memory_summary") or None,
                     recent_messages=state.get("memory_messages") or None,
+                    resume_from=resume_from,
                     run_id=run_id,
                     ui_debug=ui_debug,
                 )
-                if commands:
+                if cmd_result.commands:
                     return {
                         **_emit_phase_update(
                             state,
@@ -839,7 +1173,37 @@ def act_node(state: GraphState) -> dict:
                         "next_step_kind": "tool",
                         "next_tool_name": "exec_geogebra_commands",
                         "next_tool_call_id": str(uuid.uuid4()),
-                        "next_tool_input": {"commands": commands},
+                        "next_tool_input": {"commands": cmd_result.commands},
+                        "answer_overlay": {},
+                        **(_clear_partial_output() if last_partial_op == "command_gen" else {}),
+                        "model_calls_used": model_calls_used,
+                        "model_calls_limit": model_calls_limit,
+                    }
+
+                if (
+                    cmd_result.stream.completed is False
+                    and isinstance(cmd_result.stream.text, str)
+                    and cmd_result.stream.text.strip()
+                ):
+                    return {
+                        **_emit_phase_update(
+                            state,
+                            "Revise",
+                            summary="作图步骤生成中断。",
+                            result="Interrupted",
+                            next_step="你可以点击“继续生成/继续作图”来接着生成作图步骤。",
+                        ),
+                        "last_verify_issues": issues,
+                        "next_step_kind": "final",
+                        "answer_text": "作图步骤生成被中断了。你可以点击“继续生成/继续作图”，我会接着把作图步骤生成出来并继续作图。",
+                        "answer_overlay": {"kind": "resume_available", "action": "continue_generation", "op": "command_gen", "wants_draw": True},
+                        **_store_partial_output(
+                            op="command_gen",
+                            role=cmd_result.stream.role,
+                            text=cmd_result.stream.text,
+                            error=cmd_result.stream.error,
+                            prompt_sha256=cmd_result.stream.prompt_sha256,
+                        ),
                         "model_calls_used": model_calls_used,
                         "model_calls_limit": model_calls_limit,
                     }
@@ -937,17 +1301,45 @@ def act_node(state: GraphState) -> dict:
     can_use_llm = load_llm_config() is not None and model_calls_used < model_calls_limit
     if can_use_llm:
         model_calls_used += 1
-        answer = generate_final_answer(
-            user_text=user_text,
+        resume_from = last_partial_text.strip() if (resume_generation and last_partial_op == "final" and last_partial_text.strip()) else None
+        result = generate_final_answer(
+            user_text=task_user_text,
             tool_calls_used=tool_calls_used,
             tool_calls_limit=tool_calls_limit,
             tool_results=state.get("tool_results"),
             memory_summary=state.get("memory_summary") or None,
             recent_messages=state.get("memory_messages") or None,
+            resume_from=resume_from,
             run_id=run_id,
             ui_debug=ui_debug,
         )
-        if answer:
+        if result.stream.completed is False and isinstance(result.stream.text, str) and result.stream.text.strip():
+            merged = _merge_resume_text(resume_from or "", result.stream.text)
+            return {
+                **_emit_phase_update(
+                    state,
+                    "Answer",
+                    summary="回答生成中断，但已保留部分内容。",
+                    result="Interrupted",
+                    next_step="你可以点击“继续生成/继续作图”来接着完成。",
+                ),
+                "next_step_kind": "final",
+                "answer_text": merged + "\n\n（生成被中断）你可以点击“继续生成/继续作图”来接着完成。",
+                "memory_append_assistant_text": merged,
+                "answer_overlay": {"kind": "resume_available", "action": "continue_generation", "op": "final", "wants_draw": False},
+                **_store_partial_output(
+                    op="final",
+                    role=result.stream.role,
+                    text=merged,
+                    error=result.stream.error,
+                    prompt_sha256=result.stream.prompt_sha256,
+                ),
+                "model_calls_used": model_calls_used,
+                "model_calls_limit": model_calls_limit,
+            }
+
+        if isinstance(result.text, str) and result.text.strip():
+            answer_text = _merge_resume_text(resume_from or "", result.text)
             return {
                 **_emit_phase_update(
                     state,
@@ -957,7 +1349,10 @@ def act_node(state: GraphState) -> dict:
                     next_step="输出答案。",
                 ),
                 "next_step_kind": "final",
-                "answer_text": answer,
+                "answer_text": answer_text,
+                "memory_append_assistant_text": answer_text,
+                "answer_overlay": {},
+                **_clear_partial_output(),
                 "model_calls_used": model_calls_used,
                 "model_calls_limit": model_calls_limit,
             }
@@ -989,8 +1384,10 @@ def finalize_node(state: GraphState) -> dict:
     keep_last = read_int_env("V2_MEMORY_KEEP_LAST", 40, min_value=2, max_value=max_messages)
 
     memory_messages = compact_memory_messages(state.get("memory_messages"))
-    if answer_text:
-        memory_messages.append({"role": "assistant", "text": answer_text[:2000]})
+    append_text = (state.get("memory_append_assistant_text") or "").strip()
+    text_for_memory = append_text if append_text else answer_text
+    if text_for_memory:
+        memory_messages.append({"role": "assistant", "text": text_for_memory[:2000]})
 
     memory_summary = (state.get("memory_summary") or "").strip()
     if len(memory_messages) > max_messages:
@@ -1014,6 +1411,8 @@ def finalize_node(state: GraphState) -> dict:
         "memory_summary": memory_summary,
         "model_calls_used": model_calls_used,
         "model_calls_limit": model_calls_limit,
+        # Prevent accidental double-append across runs/checkpoints.
+        "memory_append_assistant_text": "",
     }
 
 

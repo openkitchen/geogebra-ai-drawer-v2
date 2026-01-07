@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from functools import lru_cache
 from typing import Any, Callable, TypeVar
 
+import httpx
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
 from pydantic import BaseModel
@@ -29,6 +31,33 @@ def _extract_json_object(raw: str) -> str | None:
     return s[start : end + 1]
 
 
+def _socks_proxy_needs_disable() -> bool:
+    proxy_vars = [
+        "OPENAI_PROXY",
+        "openai_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ]
+    has_socks = False
+    for k in proxy_vars:
+        v = (os.getenv(k) or "").strip().lower()
+        if v.startswith("socks"):
+            has_socks = True
+            break
+    if not has_socks:
+        return False
+    try:
+        import socksio  # type: ignore  # noqa: F401
+
+        return False
+    except Exception:
+        return True
+
+
 @lru_cache(maxsize=8)
 def _build_llm(*, api_key: str, base_url: str | None, model: str, temperature: float, timeout_s: float) -> ChatOpenAI:
     # NOTE: Use the new langchain-openai parameter names so timeout/retry behavior is effective.
@@ -44,6 +73,10 @@ def _build_llm(*, api_key: str, base_url: str | None, model: str, temperature: f
     }
     if base_url:
         kwargs["base_url"] = base_url
+
+    if _socks_proxy_needs_disable():
+        kwargs["http_client"] = httpx.Client(timeout=timeout_s, trust_env=False)
+        kwargs["http_async_client"] = httpx.AsyncClient(timeout=timeout_s, trust_env=False)
     return ChatOpenAI(**kwargs)
 
 
@@ -211,7 +244,11 @@ class LlmClient:
                                     out.append(msg)
                                 return out
 
-                            client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+                            if _socks_proxy_needs_disable():
+                                http_client = httpx.Client(timeout=cfg.timeout_s, trust_env=False)
+                                client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url, http_client=http_client)
+                            else:
+                                client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
                             openai_messages = _lc_messages_to_openai(messages)
 
                             trace_line(

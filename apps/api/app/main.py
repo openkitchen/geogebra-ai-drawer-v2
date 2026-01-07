@@ -286,6 +286,7 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
         def _run_graph_worker() -> None:
             interrupt_value: Optional[dict] = None
             answer_text: Optional[str] = None
+            answer_overlay: Optional[dict] = None
             try:
                 interrupts_seen = False
                 plan_sent = bool(run.plan_sent)
@@ -344,11 +345,13 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
                                 pass
                         if isinstance(node_out.get("answer_text"), str):
                             answer_text = node_out["answer_text"]
+                        if isinstance(node_out.get("answer_overlay"), dict):
+                            answer_overlay = node_out.get("answer_overlay")
             except Exception as e:
                 _emit("__done__", {"error": str(e)})
                 return
 
-            _emit("__done__", {"interrupt_value": interrupt_value, "answer_text": answer_text})
+            _emit("__done__", {"interrupt_value": interrupt_value, "answer_text": answer_text, "answer_overlay": answer_overlay})
 
         threading.Thread(target=_run_graph_worker, daemon=True).start()
 
@@ -389,12 +392,13 @@ async def run_stream(thread_id: str, body: RunStreamRequest) -> EventSourceRespo
 
         interrupt_value = done.get("interrupt_value")
         answer_text = done.get("answer_text")
+        answer_overlay = done.get("answer_overlay")
 
         if interrupt_value is None:
             final_payload = {
                 "answer": {
                     "explanation": answer_text or "运行未按预期发出前端工具请求（interrupt）。",
-                    "overlay_text": None,
+                    "overlay_text": answer_overlay if isinstance(answer_overlay, dict) and answer_overlay else None,
                 }
             }
             trace_sse(run_id=run_id, ui_debug=ui_debug, event="final", data=final_payload)
@@ -546,6 +550,7 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
         def _run_graph_worker() -> None:
             interrupt_value: Optional[dict] = None
             answer_text: Optional[str] = None
+            answer_overlay: Optional[dict] = None
             try:
                 interrupts_seen = False
                 plan_sent = bool(run.plan_sent)
@@ -589,11 +594,13 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
                                 pass
                         if isinstance(node_out.get("answer_text"), str):
                             answer_text = node_out["answer_text"]
+                        if isinstance(node_out.get("answer_overlay"), dict):
+                            answer_overlay = node_out.get("answer_overlay")
             except Exception as e:
                 _emit("__done__", {"error": str(e)})
                 return
 
-            _emit("__done__", {"interrupt_value": interrupt_value, "answer_text": answer_text})
+            _emit("__done__", {"interrupt_value": interrupt_value, "answer_text": answer_text, "answer_overlay": answer_overlay})
 
         threading.Thread(target=_run_graph_worker, daemon=True).start()
 
@@ -629,6 +636,7 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
 
         interrupt_value = done.get("interrupt_value")
         answer_text = done.get("answer_text")
+        answer_overlay = done.get("answer_overlay")
 
         if interrupt_value is not None:
             run.pending_tool = PendingTool(
@@ -652,7 +660,7 @@ async def resume_run(thread_id: str, run_id: str, body: ResumeRequest) -> EventS
         final_payload = {
             "answer": {
                 "explanation": answer_text or f"我已经收到：{run.user_text}",
-                "overlay_text": None,
+                "overlay_text": answer_overlay if isinstance(answer_overlay, dict) and answer_overlay else None,
             }
         }
         trace_sse(run_id=run_id, ui_debug=ui_debug, event="final", data=final_payload)

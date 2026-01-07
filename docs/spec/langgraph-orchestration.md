@@ -113,10 +113,27 @@ POC 阶段建议 **pin 版本**（不要“永远最新版”），升级走小�
 ```json
 {
   "input": { "user_text": "..." },
-  "ui_context": { "locale": "zh-CN", "debug": true, "plan_mode": false }
+  "ui_context": {
+    "locale": "zh-CN",
+    "debug": true,
+    "plan_mode": false,
+    "intent_hint": {
+      "wants_draw": true,
+      "difficulty": "hard",
+      "continue_generation": false
+    }
+  }
 }
 ```
 - response：SSE（事件为我们自定义的 `RunStreamEvent`；底层可来自 LangGraph `graph.stream(..., stream_mode=...)` 或 LangChain `astream_events`）
+
+补充：`ui_context.intent_hint` 是 UI 的**显式结构化意图**（不由文本解析得到），用于 deterministic 的动作入口（例如按钮/快捷操作），同时也可用于覆盖难度判定。
+
+推荐键（v2 允许扩展）：
+- `wants_draw: boolean`：明确表示本轮是否要作图（避免 “继续/重试” 被分类成不作图）
+- `forbids_drawing: boolean`：明确禁止作图
+- `difficulty: "simple" | "hard"`：显式难度（可选）
+- `continue_generation: boolean`：显式“继续生成/继续作图”请求（用于中断续写；见 4.2）
 
 3) `POST /api/threads/{thread_id}/runs/{run_id}/resume`
 - request（ToolResumePayload）：
@@ -242,6 +259,24 @@ export type RunStreamEvent =
 - `protocol_version`：推荐由服务端放在 `run_start.data.protocol_version`（UI 可忽略；用于排障/回放）
 - `client_error`：允许 UI 侧本地追加事件用于记录网络错误/409 detail（**不要求**服务端发 SSE；不属于服务端 schema）
 - `budget`：建议在 `run_start` 后与每次 `tool_end` 后发送 `tool_calls_used/tool_calls_limit`（止损/成本可见）
+
+### 4.2 “继续生成/继续作图”（中断续写）
+目标：当 LLM 因 **429/超时/断流** 等原因中断时，用户可点击 UI 的明确按钮继续，而不是输入“继续”让系统误判为新话题或 simple。
+
+约定：
+- UI 发送：`ui_context.intent_hint.continue_generation=true`（并建议同步带上 `wants_draw`，避免被意图模型判成不作图）
+- 服务端：保存上一次 LLM 的 `partial_text`（以及 `op/role/prompt_sha256/error`），并在续写时把 partial 作为 `assistant` 消息注入，要求模型从末尾继续且不要重复
+- UI 展示：服务端在 `final.data.answer.overlay_text` 里回传一个可机读的 “resume available” 结构体，UI 用它来决定是否显示“继续”按钮，而不是从文本里猜测
+
+建议的 `overlay_text` 结构：
+```json
+{
+  "kind": "resume_available",
+  "action": "continue_generation",
+  "op": "final | command_gen",
+  "wants_draw": true
+}
+```
 
 ---
 

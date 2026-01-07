@@ -4,6 +4,8 @@ import os
 import re
 import json
 import time
+import hashlib
+import httpx
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -58,6 +60,46 @@ class LlmConfig:
     model: str
     temperature: float
     timeout_s: float
+
+
+@dataclass(frozen=True)
+class StreamTextResult:
+    op: str
+    role: str
+    text: str | None
+    completed: bool
+    error: str | None
+    prompt_sha256: str | None
+
+
+def _fingerprint_messages(messages: list[Any]) -> str:
+    h = hashlib.sha256()
+    for m in messages:
+        typ = getattr(m, "type", None) or m.__class__.__name__
+        content = str(getattr(m, "content", "") or "")
+        h.update(str(typ).encode("utf-8", errors="replace"))
+        h.update(b"\n")
+        h.update(content.encode("utf-8", errors="replace"))
+        h.update(b"\n---\n")
+    return h.hexdigest()
+
+
+@dataclass(frozen=True)
+class PlanGenerationResult:
+    steps: list[str] | None
+    stream: StreamTextResult
+
+
+@dataclass(frozen=True)
+class CommandGenerationResult:
+    commands: list[str] | None
+    stream: StreamTextResult
+
+
+@dataclass(frozen=True)
+class FinalAnswerGenerationResult:
+    text: str | None
+    stream: StreamTextResult
 
 
 def _preview_text(value: Any, *, limit: int = 320) -> str | None:
@@ -242,6 +284,147 @@ def _invoke_openai_stream_text(
 
     text = (content_total or "").strip()
     return text if text else None
+
+
+def _invoke_openai_stream_text_result(
+    *,
+    cfg: LlmConfig,
+    op: str,
+    role: str,
+    messages: list[Any],
+    run_id: str | None,
+    ui_debug: bool,
+    send_tokens: bool,
+) -> StreamTextResult:
+    """Stream a completion and capture partial output even if interrupted.
+
+    This is used to enable "resume generation" flows after provider timeouts/rate-limits.
+    """
+
+    prompt_sha256 = _fingerprint_messages(messages)
+
+    if send_tokens and run_id:
+        try:
+            from .llm.token_events import get_token_manager
+
+            token_mgr = get_token_manager()
+        except Exception:
+            token_mgr = None
+    else:
+        token_mgr = None
+
+    t0 = time.time()
+    first_token_ms: int | None = None
+    content_total = ""
+    chunk_count = 0
+    last_usage: dict[str, Any] | None = None
+    error: str | None = None
+    completed = False
+
+    _trace_llm_event(
+        run_id=run_id,
+        ui_debug=ui_debug,
+        name=f"{op}.stream_start",
+        data={
+            "role": role,
+            "model": cfg.model,
+            "base_url": cfg.base_url,
+            "timeout_s": cfg.timeout_s,
+            "messages": [
+                {"type": getattr(m, "type", None), "content_len": len(str(getattr(m, "content", "") or ""))}
+                for m in messages
+            ],
+            "prompt_sha256": prompt_sha256,
+        },
+    )
+
+    try:
+        llm = _build_llm(
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            model=cfg.model,
+            temperature=cfg.temperature,
+            timeout_s=cfg.timeout_s,
+        )
+    except Exception as e:
+        if run_id:
+            trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"langchain_stream.build[{op}][{role}]", exc=e)
+        error = f"{type(e).__name__}: {e}"
+        completed = False
+        return StreamTextResult(
+            op=op,
+            role=role,
+            text=None,
+            completed=completed,
+            error=error,
+            prompt_sha256=prompt_sha256,
+        )
+
+    runnable_config = _build_runnable_config(run_id=run_id, op=op, role=role)
+
+    try:
+        stream_gen = llm.stream(messages, config=runnable_config)
+        for chunk in stream_gen:
+            chunk_count += 1
+            last_usage = _extract_usage_metadata(chunk) or last_usage
+
+            delta = getattr(chunk, "content", None)
+            if isinstance(delta, list):
+                delta = "".join(str(x) for x in delta)
+            if not isinstance(delta, str) or not delta:
+                continue
+
+            if first_token_ms is None:
+                first_token_ms = int((time.time() - t0) * 1000)
+                _trace_llm_event(
+                    run_id=run_id,
+                    ui_debug=ui_debug,
+                    name=f"{op}.first_token",
+                    data={"role": role, "first_token_ms": first_token_ms, "chunks_before_first_token": chunk_count},
+                )
+
+            if token_mgr is not None and run_id:
+                try:
+                    token_mgr.send_token(run_id, delta, channel="content")
+                except Exception:
+                    pass
+
+            content_total += delta
+
+        completed = True
+    except Exception as e:
+        if run_id:
+            trace_exception(run_id=run_id, ui_debug=ui_debug, where=f"langchain_stream.iter[{op}][{role}]", exc=e)
+        error = f"{type(e).__name__}: {e}"
+        completed = False
+    finally:
+        took_ms = int((time.time() - t0) * 1000)
+        _trace_llm_event(
+            run_id=run_id,
+            ui_debug=ui_debug,
+            name=f"{op}.stream_end",
+            data={
+                "role": role,
+                "took_ms": took_ms,
+                "chunks": chunk_count,
+                "first_token_ms": first_token_ms,
+                "content_len": len(content_total),
+                "usage": last_usage,
+                "completed": completed,
+                "error": error,
+                "prompt_sha256": prompt_sha256,
+            },
+        )
+
+    text = (content_total or "").strip() or None
+    return StreamTextResult(
+        op=op,
+        role=role,
+        text=text,
+        completed=completed,
+        error=error,
+        prompt_sha256=prompt_sha256,
+    )
 
 
 def _strip_wrapping_quotes(raw: str) -> str:
@@ -580,6 +763,34 @@ def _build_llm(
     temperature: float,
     timeout_s: float,
 ) -> ChatOpenAI:
+    def _socks_proxy_needs_disable() -> bool:
+        # If the environment configures a SOCKS proxy but `socksio` isn't installed,
+        # httpx will raise at request time. In that case, ignore env proxies.
+        proxy_vars = [
+            "OPENAI_PROXY",
+            "openai_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+        ]
+        has_socks = False
+        for k in proxy_vars:
+            v = (os.getenv(k) or "").strip().lower()
+            if v.startswith("socks"):
+                has_socks = True
+                break
+        if not has_socks:
+            return False
+        try:
+            import socksio  # type: ignore  # noqa: F401
+
+            return False
+        except Exception:
+            return True
+
     # NOTE: Use the new langchain-openai parameter names so timeout/retry behavior is effective.
     kwargs: dict[str, Any] = {
         "model": model,
@@ -593,6 +804,10 @@ def _build_llm(
     }
     if base_url:
         kwargs["base_url"] = base_url
+
+    if _socks_proxy_needs_disable():
+        kwargs["http_client"] = httpx.Client(timeout=timeout_s, trust_env=False)
+        kwargs["http_async_client"] = httpx.AsyncClient(timeout=timeout_s, trust_env=False)
     return ChatOpenAI(**kwargs)
 
 
@@ -990,9 +1205,10 @@ def generate_geogebra_commands(
     runtime_feedback: str | None,
     memory_summary: str | None = None,
     recent_messages: list[dict[str, Any]] | None = None,
+    resume_from: str | None = None,
     run_id: str | None = None,
     ui_debug: bool = False,
-) -> list[str] | None:
+) -> CommandGenerationResult:
     requested_role = "repair" if (runtime_feedback or "").strip() else "main"
     phase_pack = "repair" if (runtime_feedback or "").strip() else "draw"
 
@@ -1037,6 +1253,15 @@ def generate_geogebra_commands(
     roles_to_try = [requested_role] + [r for r in _fallback_roles() if r != requested_role]
     roles_to_try = roles_to_try[:1]
 
+    last_stream = StreamTextResult(
+        op="command_gen",
+        role=requested_role,
+        text=None,
+        completed=False,
+        error="llm_unavailable",
+        prompt_sha256=None,
+    )
+
     for role in roles_to_try:
         cfg = load_llm_config(role=role)
         if cfg is None:
@@ -1078,18 +1303,31 @@ def generate_geogebra_commands(
                 return None
             return _clean_commands(list(parsed.commands))
 
-        # Use OpenAI-compatible streaming and wait until completion.
-        raw = _invoke_openai_stream_text(
+        msgs: list[Any] = [system] + context_msgs + [human]
+        if isinstance(resume_from, str) and resume_from.strip():
+            msgs = msgs + [
+                AIMessage(content=resume_from.strip()),
+                HumanMessage(
+                    content=(
+                        "The assistant output above may be truncated. "
+                        "Please continue and output a complete, valid JSON object for ExecGeogebraCommandsInput. "
+                        "Return JSON only (no extra prose)."
+                    )
+                ),
+            ]
+
+        stream = _invoke_openai_stream_text_result(
             cfg=cfg,
             op="command_gen",
             role=role,
-            messages=[system] + context_msgs + [human],
+            messages=msgs,
             run_id=run_id,
             ui_debug=ui_debug,
             send_tokens=bool(ui_debug),
         )
+        last_stream = stream
 
-        commands = parse_commands(raw) if isinstance(raw, str) else None
+        commands = parse_commands(stream.text) if isinstance(stream.text, str) else None
         took_ms = int((time.time() - t0) * 1000)
         _trace_llm_event(
             run_id=run_id,
@@ -1105,7 +1343,7 @@ def generate_geogebra_commands(
             },
         )
         if commands:
-            return commands
+            return CommandGenerationResult(commands=commands, stream=stream)
 
     _trace_llm_event(
         run_id=run_id,
@@ -1113,7 +1351,7 @@ def generate_geogebra_commands(
         name="command_gen.failed",
         data={"requested_role": requested_role, "roles_tried": roles_to_try},
     )
-    return None
+    return CommandGenerationResult(commands=None, stream=last_stream)
 
 
 def generate_final_answer(
@@ -1124,9 +1362,10 @@ def generate_final_answer(
     tool_results: list[dict[str, Any]] | None,
     memory_summary: str | None = None,
     recent_messages: list[dict[str, Any]] | None = None,
+    resume_from: str | None = None,
     run_id: str | None = None,
     ui_debug: bool = False,
-) -> str | None:
+) -> FinalAnswerGenerationResult:
     canvas_objects = _compact_canvas_objects(tool_results)
     executed_commands = _compact_exec_commands(tool_results)
     raw_objects = _extract_latest_canvas_objects_raw(tool_results)
@@ -1157,6 +1396,15 @@ def generate_final_answer(
     roles_to_try = ["main"] + [r for r in _fallback_roles() if r != "main"]
     roles_to_try = roles_to_try[:1]
 
+    last_stream = StreamTextResult(
+        op="final",
+        role="main",
+        text=None,
+        completed=False,
+        error="llm_unavailable",
+        prompt_sha256=None,
+    )
+
     for role in roles_to_try:
         cfg = load_llm_config(role=role)
         if cfg is None:
@@ -1180,15 +1428,30 @@ def generate_final_answer(
 
         t0 = time.time()
 
-        text = _invoke_openai_stream_text(
+        msgs: list[Any] = [system] + context_msgs + [human]
+        if isinstance(resume_from, str) and resume_from.strip():
+            msgs = msgs + [
+                AIMessage(content=resume_from.strip()),
+                HumanMessage(
+                    content=(
+                        "Continue from the assistant text above. "
+                        "Do not repeat any already provided content. "
+                        "Write only the continuation (no preamble)."
+                    )
+                ),
+            ]
+
+        stream = _invoke_openai_stream_text_result(
             cfg=cfg,
             op="final",
             role=role,
-            messages=[system] + context_msgs + [human],
+            messages=msgs,
             run_id=run_id,
             ui_debug=ui_debug,
             send_tokens=bool(ui_debug),
         )
+        last_stream = stream
+        text = stream.text
         if not isinstance(text, str) or not text.strip():
             took_ms = int((time.time() - t0) * 1000)
             _trace_llm_event(
@@ -1223,7 +1486,7 @@ def generate_final_answer(
                 "unwrap": unwrap_info,
             },
         )
-        return text
+        return FinalAnswerGenerationResult(text=text, stream=stream)
 
     _trace_llm_event(
         run_id=run_id,
@@ -1231,7 +1494,7 @@ def generate_final_answer(
         name="final.failed",
         data={"roles_tried": roles_to_try},
     )
-    return None
+    return FinalAnswerGenerationResult(text=None, stream=last_stream)
 
 
 def decide_next_step(
@@ -1399,14 +1662,25 @@ def generate_plan(
     memory_summary: str | None,
     recent_messages: list[dict[str, Any]] | None,
     tool_results: list[dict[str, Any]] | None,
+    resume_from: str | None = None,
     run_id: str | None = None,
     ui_debug: bool = False,
-) -> list[str] | None:
+) -> PlanGenerationResult:
     # Planning MUST use the main/advanced role.
     # Do not allow routing to a smaller/cheaper role via env vars.
     cfg = load_llm_config(role="main")
     if cfg is None:
-        return None
+        return PlanGenerationResult(
+            steps=None,
+            stream=StreamTextResult(
+                op="plan",
+                role="main",
+                text=None,
+                completed=False,
+                error="llm_unavailable",
+                prompt_sha256=None,
+            ),
+        )
 
     canvas_objects = _compact_canvas_objects(tool_results)
     raw_objects = _extract_latest_canvas_objects_raw(tool_results)
@@ -1434,17 +1708,31 @@ def generate_plan(
         )
     )
 
-    raw = _invoke_openai_stream_text(
+    msgs: list[Any] = [system] + context_msgs + [human]
+    if isinstance(resume_from, str) and resume_from.strip():
+        msgs = msgs + [
+            AIMessage(content=resume_from.strip()),
+            HumanMessage(
+                content=(
+                    "The assistant output above may be truncated. "
+                    "Please continue and output a complete, valid JSON object for PlanSteps. "
+                    "Return JSON only."
+                )
+            ),
+        ]
+
+    stream = _invoke_openai_stream_text_result(
         cfg=cfg,
         op="plan",
         role="main",
-        messages=[system] + context_msgs + [human],
+        messages=msgs,
         run_id=run_id,
         ui_debug=ui_debug,
         send_tokens=bool(ui_debug),
     )
+    raw = stream.text
     if not isinstance(raw, str) or not raw.strip():
-        return None
+        return PlanGenerationResult(steps=None, stream=stream)
 
     body, _unwrap = _unwrap_single_fenced_block(raw)
     blob = _extract_json_object(body)
@@ -1459,8 +1747,8 @@ def generate_plan(
     try:
         parsed = PlanSteps.model_validate(payload)
     except ValidationError:
-        return None
-    return parsed.steps
+        return PlanGenerationResult(steps=None, stream=stream)
+    return PlanGenerationResult(steps=parsed.steps, stream=stream)
 
 
 class MemorySummary(BaseModel):

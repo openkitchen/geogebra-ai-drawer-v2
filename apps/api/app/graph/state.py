@@ -54,3 +54,17 @@ class GraphState(TypedDict, total=False):
     next_tool_input: Any
     tool_results: list[dict[str, Any]]
     answer_text: str
+    # Base task text (stable across "continue generation" runs).
+    task_user_text: str
+    # Resume generation request from UI (structured hint).
+    resume_generation: bool
+    # Last partial LLM output (for resume flows).
+    last_partial_text: str
+    last_partial_op: str
+    last_partial_role: str
+    last_prompt_sha256: str
+    last_llm_error: dict[str, Any]
+    # Optional UI overlay payload for the final answer (protocol_v2: overlay_text).
+    answer_overlay: dict[str, Any]
+    # If set, this text is appended to memory instead of answer_text (used for partial + overlay notes).
+    memory_append_assistant_text: str
